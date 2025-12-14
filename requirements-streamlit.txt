@@ -1,2 +1,7 @@
--r requirements-base.txt
+kafka-python==2.0.2
+pandas==2.2.2
+requests==2.32.3
 streamlit==1.36.0
+google-cloud-bigquery==3.16.0
+pyarrow==16.1.0
+pandas-gbq==0.22.0

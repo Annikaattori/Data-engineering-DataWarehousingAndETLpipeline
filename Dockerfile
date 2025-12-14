@@ -6,9 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-ARG REQUIREMENTS_FILE=requirements-worker.txt
-COPY requirements-base.txt requirements-streamlit.txt requirements-worker.txt requirements-airflow.txt ./
-RUN pip install --no-cache-dir -r ${REQUIREMENTS_FILE}
+COPY requirements-streamlit.txt ./
+RUN pip install --no-cache-dir -r requirements-streamlit.txt
 
 COPY src ./src
 COPY visualization ./visualization
