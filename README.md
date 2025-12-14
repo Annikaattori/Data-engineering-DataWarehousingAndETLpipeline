@@ -84,11 +84,16 @@ flowchart LR
 - Kafka broker available at `localhost:9092` (configurable via env var `KAFKA_BOOTSTRAP_SERVERS`)
 - Google Cloud credentials for BigQuery (if testing actual loads)
 
-Install dependencies:
+Install dependencies (UI, producer, and consumer services):
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-streamlit.txt
+```
+
+If you want to develop Airflow DAGs locally, install its dependencies separately to keep the heavier stack isolated from the Streamlit image:
+```bash
+pip install -r requirements-airflow.txt
 ```
 
 Place your BigQuery API key or service account JSON file at `keys/bigquery/api_key.json`
