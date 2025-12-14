@@ -26,37 +26,37 @@ The pipeline uses a Kafka producer/consumer pair to capture raw observations, st
 ```mermaid
 flowchart LR
     subgraph Orchestration
-        Airflow[AIRFLOW DAG<br/>(dags/fmi_weather_dag.py)]
+        Airflow["AIRFLOW DAG (dags/fmi_weather_dag.py)"]
     end
 
     subgraph Ingestion
-        FMI[FMI API<br/>(live data)]
-        Sample[Sample JSON<br/>(data/sample_observations.json)]
-        Producer[Kafka Producer<br/>(src/data_processing/kafka_stream.py)]
+        FMI["FMI API (live data)"]
+        Sample["Sample JSON (data/sample_observations.json)"]
+        Producer["Kafka Producer (src/data_processing/kafka_stream.py)"]
     end
 
     subgraph Queue
-        Kafka[(Kafka Topic<br/>fmi_observations)]
+        Kafka[("Kafka Topic fmi_observations")]
     end
 
     subgraph Processing
-        Consumer[Kafka Consumer<br/>(src/data_processing/kafka_stream.py)]
-        Transform[Transformations<br/>(src/data_processing/transformations.py)]
+        Consumer["Kafka Consumer (src/data_processing/kafka_stream.py)"]
+        Transform["Transformations (src/data_processing/transformations.py)"]
     end
 
     subgraph Storage
-        BQ[BigQuery Dataset<br/>(fmi_weather)]
-        DailyTable[Daily Table<br/>(weather)]
-        LongTerm[Station Tables<br/>(station_&lt;id&gt;)]
+        BQ["BigQuery Dataset (fmi_weather)"]
+        DailyTable["Daily Table (weather)"]
+        LongTerm["Station Tables (station_id)"]
     end
 
     subgraph Visualization
-        Streamlit[Streamlit App<br/>(visualization/app.py)]
+        Streamlit["Streamlit App (visualization/app.py)"]
     end
 
     subgraph Deployment
-        Docker[Docker Compose<br/>(docker-compose.yml)]
-        Keys[Service Account Key<br/>(keys/bigquery/api_key.json)]
+        Docker["Docker Compose (docker-compose.yml)"]
+        Keys["Service Account Key (keys/bigquery/api_key.json)"]
     end
 
     Airflow -->|triggers| Producer
