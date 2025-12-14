@@ -17,6 +17,7 @@ LOGGER = logging.getLogger(__name__)
 class ObservationProducer:
     def __init__(self, bootstrap_servers: str | None = None, topic: str | None = None):
         self.topic = topic or CONFIG.kafka_topic
+        # KafkaProducer serialises Observation dicts as UTF-8 JSON strings for portability
         self.producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers or CONFIG.kafka_bootstrap_servers,
             value_serializer=lambda value: json.dumps(value).encode("utf-8"),
@@ -85,25 +86,72 @@ class BigQuerySink:
     def _long_term_table(self, station_id: str) -> str:
         return f"{self.dataset}.{CONFIG.long_term_table_prefix}{station_id}"
 
+    def _verify_row_persistence(self, destination_table: str, expected_rows: int) -> None:
+        """Confirm rows landed in BigQuery and emit actionable error logs if not.
+
+        The verification step is best-effort; the upload should not be considered
+        successful unless the table metadata shows at least the number of rows we
+        attempted to append. We avoid failing fast on auth/network errors to keep
+        local development flows usable.
+        """
+
+        try:  # pragma: no cover - requires live BigQuery
+            table = self.bq_client.get_table(destination_table)
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.warning(
+                "Unable to verify BigQuery load for %s: %s. Double-check credentials and table access.",
+                destination_table,
+                exc,
+            )
+            return
+
+        if table.num_rows < expected_rows:
+            LOGGER.error(
+                "BigQuery load verification failed for %s: expected at least %s rows but found %s.",
+                destination_table,
+                expected_rows,
+                table.num_rows,
+            )
+        else:
+            LOGGER.info(
+                "Verified %s rows now present in %s (table total: %s rows).",
+                expected_rows,
+                destination_table,
+                table.num_rows,
+            )
+
+    def _upload_and_verify(self, frame, destination_table: str) -> None:
+        """Upload a dataframe to BigQuery with detailed error logging."""
+
+        try:  # pragma: no cover - requires google cloud
+            frame.to_gbq(
+                destination_table=destination_table,
+                project_id=self.project_id,
+                credentials=self.credentials,
+                if_exists="append",
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.error(
+                "Failed to upload %s rows to %s: %s", len(frame), destination_table, exc
+            )
+            raise
+
+        self._verify_row_persistence(destination_table, expected_rows=len(frame))
+
     def write_daily_batch(self, observations: List[Observation]):
         frame = observations_as_dataframe(observations)
         if frame.empty:
             LOGGER.warning("Received empty batch; nothing to load")
             return 0
 
+        destination_table = f"{self.dataset}.{self.daily_table}"
         LOGGER.info(
-            "Loading %s rows to %s.%s in project %s",
+            "Loading %s rows to %s in project %s",
             len(frame),
-            self.dataset,
-            self.daily_table,
+            destination_table,
             self.project_id,
         )
-        frame.to_gbq(
-            destination_table=f"{self.dataset}.{self.daily_table}",
-            project_id=self.project_id,
-            credentials=self.credentials,
-            if_exists="append",
-        )
+        self._upload_and_verify(frame, destination_table=destination_table)
         self._update_long_term_tables(frame)
         return len(frame)
 
@@ -114,13 +162,14 @@ class BigQuerySink:
             if station_id not in self.station_whitelist:
                 continue
             table_name = self._long_term_table(station_id)
-            station_frame.to_gbq(
-                destination_table=table_name,
-                project_id=self.project_id,
-                credentials=self.credentials,
-                if_exists="append",
+            # Extra logging makes it easy to follow per-station uploads when running locally
+            LOGGER.info(
+                "Updating long-term table %s with %s rows (station %s)",
+                table_name,
+                len(station_frame),
+                station_id,
             )
-            LOGGER.info("Updated long-term table %s with %s rows", table_name, len(station_frame))
+            self._upload_and_verify(station_frame, destination_table=table_name)
 
 
 class ObservationConsumer:
@@ -142,6 +191,7 @@ class ObservationConsumer:
         self.sink = BigQuerySink()
 
     def consume_once(self, max_messages: int = 200) -> int:
+        # Collect Kafka messages in-memory so we can upload in a single BigQuery batch
         buffer: List[Observation] = []
         for index, message in enumerate(self.consumer):
             buffer.append(message.value)

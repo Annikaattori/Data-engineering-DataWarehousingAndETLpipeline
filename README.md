@@ -21,6 +21,62 @@ The pipeline uses a Kafka producer/consumer pair to capture raw observations, st
 5. **Orchestration**: `dags/fmi_weather_dag.py` schedules ingestion every 15 minutes with basic retry settings.
 6. **Visualisation**: `visualization/app.py` renders latest tables and long-term series (temperature and humidity) via Streamlit.
 
+## ETL/ELT architecture at a glance
+
+```mermaid
+flowchart LR
+    subgraph Orchestration
+        Airflow[AIRFLOW DAG]\n(fmi_weather_dag.py)
+    end
+
+    subgraph Ingestion
+        FMI[FMI API]\n(Live data)
+        Sample[Sample JSON]\n(data/sample_observations.json)
+        Producer[Kafka Producer]\n(src/data_processing/kafka_stream.py)
+    end
+
+    subgraph Queue
+        Kafka[(Kafka Topic\nfmi_observations)]
+    end
+
+    subgraph Processing
+        Consumer[Kafka Consumer]\n(src/data_processing/kafka_stream.py)
+        Transform[Transformations]\n(src/data_processing/transformations.py)
+    end
+
+    subgraph Storage
+        BQ[BigQuery Dataset\n(fmi_weather)]
+        DailyTable[Daily Table\n(weather)]
+        LongTerm[Station Tables\n(station_<id>)]
+    end
+
+    subgraph Visualization
+        Streamlit[Streamlit App]\n(visualization/app.py)
+    end
+
+    subgraph Deployment
+        Docker[Docker Compose]\n(docker-compose.yml)
+        Keys[Service Account Key]\n(keys/bigquery/api_key.json)
+    end
+
+    Airflow -->|Triggers| Producer
+    Airflow -->|Triggers| Consumer
+    FMI --> Producer
+    Sample --> Producer
+    Producer --> Kafka
+    Kafka --> Consumer
+    Consumer --> Transform
+    Transform --> DailyTable
+    Transform --> LongTerm
+    DailyTable --> BQ
+    LongTerm --> BQ
+    BQ --> Streamlit
+    Docker -. orchestrates .-> Producer
+    Docker -. orchestrates .-> Consumer
+    Docker -. orchestrates .-> Streamlit
+    Keys -. auth .-> BQ
+```
+
 ## Running locally
 
 ### Prerequisites
@@ -87,8 +143,16 @@ Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run
   without FMI API access.
 - For BigQuery loads, mount your service account key at
-  `./keys/bigquery/api_key.json` (the container expects it at
+ `./keys/bigquery/api_key.json` (the container expects it at
   `/app/keys/bigquery/api_key.json`).
+
+### Stopping the services
+- Stop locally started Python commands (producer/consumer/Streamlit) with `Ctrl+C` in the terminal running them.
+- Stop the Docker Compose stack with:
+  ```bash
+  docker compose down
+  ```
+  This cleanly halts Kafka, producer, consumer, and Streamlit containers.
 
 ## Testing transformations with sample data
 A pytest suite exercises the transformation utilities. Run:
