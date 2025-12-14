@@ -137,7 +137,7 @@ containers.
    ```bash
    docker compose up --build
    ```
-2. Access the Streamlit demo at http://localhost:8501.
+2. Access the Streamlit demo at http://localhpandas.DataFrame.to_gbqost:8501.
 
 Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run

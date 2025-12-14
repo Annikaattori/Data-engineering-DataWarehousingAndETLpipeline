@@ -1,5 +1,6 @@
 """Configuration utilities for the FMI weather pipeline."""
 from __future__ import annotations
+from dataclasses import dataclass, field
 
 import os
 from dataclasses import dataclass
@@ -36,12 +37,7 @@ class PipelineConfig:
     )
     daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
     long_term_table_prefix: str = os.getenv("BIGQUERY_LONG_TERM_PREFIX", "station_")
-    station_whitelist: List[str] = _list_from_env(
-        os.getenv(
-            "STATION_WHITELIST",
-            "101104,100968,100946,102172,101932",
-        )
-    )
+    station_whitelist: list[str] = field(default_factory=list)
     use_sample_data: bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
 
 
