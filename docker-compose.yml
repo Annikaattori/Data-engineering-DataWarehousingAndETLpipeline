@@ -39,7 +39,10 @@ services:
       "
 
   producer:
-    build: .
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-worker.txt
     container_name: producer
     depends_on:
       - broker
@@ -54,7 +57,10 @@ services:
     restart: unless-stopped
 
   consumer:
-    build: .
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-worker.txt
     container_name: consumer
     depends_on:
       - broker
@@ -71,7 +77,10 @@ services:
     restart: unless-stopped
 
   streamlit:
-    build: .
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-streamlit.txt
     container_name: streamlit
     depends_on:
       - consumer

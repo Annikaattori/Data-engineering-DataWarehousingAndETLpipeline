@@ -84,12 +84,25 @@ flowchart LR
 - Kafka broker available at `localhost:9092` (configurable via env var `KAFKA_BOOTSTRAP_SERVERS`)
 - Google Cloud credentials for BigQuery (if testing actual loads)
 
-Install dependencies:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+Install dependencies by role to avoid Airflow’s heavy stack in the UI/worker images:
+- Base libraries shared across roles (requests, pandas):
+  ```bash
+  python -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements-base.txt
+  ```
+- Streamlit UI only:
+  ```bash
+  pip install -r requirements-streamlit.txt
+  ```
+- Kafka producer/consumer and BigQuery processing:
+  ```bash
+  pip install -r requirements-worker.txt
+  ```
+- Airflow (installs worker deps plus Airflow under the official constraints file):
+  ```bash
+  pip install -r requirements-airflow.txt
+  ```
 
 Place your BigQuery API key or service account JSON file at `keys/bigquery/api_key.json`
 or point `BIGQUERY_API_KEY_PATH` to its location so the pipeline can authenticate
@@ -131,13 +144,14 @@ USE_SAMPLE_DATA=true streamlit run visualization/app.py
 
 The repository includes a Docker Compose setup that starts Kafka, creates the
 `fmi_observations` topic, and launches producer, consumer, and Streamlit
-containers.
+containers. Each service now builds against the requirements file that matches
+its role (worker vs. Streamlit) to avoid Airflow dependencies in the UI image.
 
 1. Build images and start the stack:
    ```bash
    docker compose up --build
    ```
-2. Access the Streamlit demo at http://localhpandas.DataFrame.to_gbqost:8501.
+2. Access the Streamlit demo at http://localhost:8501.
 
 Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run
