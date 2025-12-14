@@ -26,41 +26,41 @@ The pipeline uses a Kafka producer/consumer pair to capture raw observations, st
 ```mermaid
 flowchart LR
     subgraph Orchestration
-        Airflow[AIRFLOW DAG]\n(fmi_weather_dag.py)
+        Airflow[AIRFLOW DAG<br/>(dags/fmi_weather_dag.py)]
     end
 
     subgraph Ingestion
-        FMI[FMI API]\n(Live data)
-        Sample[Sample JSON]\n(data/sample_observations.json)
-        Producer[Kafka Producer]\n(src/data_processing/kafka_stream.py)
+        FMI[FMI API<br/>(live data)]
+        Sample[Sample JSON<br/>(data/sample_observations.json)]
+        Producer[Kafka Producer<br/>(src/data_processing/kafka_stream.py)]
     end
 
     subgraph Queue
-        Kafka[(Kafka Topic\nfmi_observations)]
+        Kafka[(Kafka Topic<br/>fmi_observations)]
     end
 
     subgraph Processing
-        Consumer[Kafka Consumer]\n(src/data_processing/kafka_stream.py)
-        Transform[Transformations]\n(src/data_processing/transformations.py)
+        Consumer[Kafka Consumer<br/>(src/data_processing/kafka_stream.py)]
+        Transform[Transformations<br/>(src/data_processing/transformations.py)]
     end
 
     subgraph Storage
-        BQ[BigQuery Dataset\n(fmi_weather)]
-        DailyTable[Daily Table\n(weather)]
-        LongTerm[Station Tables\n(station_<id>)]
+        BQ[BigQuery Dataset<br/>(fmi_weather)]
+        DailyTable[Daily Table<br/>(weather)]
+        LongTerm[Station Tables<br/>(station_&lt;id&gt;)]
     end
 
     subgraph Visualization
-        Streamlit[Streamlit App]\n(visualization/app.py)
+        Streamlit[Streamlit App<br/>(visualization/app.py)]
     end
 
     subgraph Deployment
-        Docker[Docker Compose]\n(docker-compose.yml)
-        Keys[Service Account Key]\n(keys/bigquery/api_key.json)
+        Docker[Docker Compose<br/>(docker-compose.yml)]
+        Keys[Service Account Key<br/>(keys/bigquery/api_key.json)]
     end
 
-    Airflow -->|Triggers| Producer
-    Airflow -->|Triggers| Consumer
+    Airflow -->|triggers| Producer
+    Airflow -->|triggers| Consumer
     FMI --> Producer
     Sample --> Producer
     Producer --> Kafka
