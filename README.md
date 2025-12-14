@@ -1,40 +1,76 @@
-# Data-engineering-DataWarehousingAndETLpipeline
+# FMI Weather Data Pipeline
 
-Option 1: Data pipeline project
+This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and preparing daily and long-term tables for downstream analytics and visualisation.
 
-The Finnish Meteorological Institute (FMI) maintains a network of weather stations in Finland. 
+The pipeline uses a Kafka producer/consumer pair to capture raw observations, stores them in BigQuery, and relies on Airflow orchestration. A Streamlit app is included to showcase the latest and long-term views with bundled offline sample data.
 
-Observations are updated about once in ten minutes and data contains basic weather information, like temperature and wind.
+## Contents
+- `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
+- `dags/`: Airflow DAG that chains producer and consumer tasks.
+- `visualization/`: Streamlit demo UI.
+- `data/sample_observations.json`: Sample observations for offline testing.
 
-This is an example of accessing the most recent weather data using FMI Python API. Note that not all the weather stations are active. The list of stations here and in csv-file.
+## Data model and DAG plan
+1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_latest()` to pull the most recent observations and publish them to Kafka.
+2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches and appends them to `fmi_weather.daily_observations` (dataset configurable via environment variables).
+3. **Daily processing**: 
+   - Dedupe incoming rows on `(station_id, timestamp)`.
+   - Run lightweight quality checks for missing values and outliers (functions in `transformations.py`).
+   - Persist deduped daily data.
+4. **Long-term history**: After each batch load, append records for selected stations into individual `station_<id>` tables for easier time-series access.
+5. **Orchestration**: `dags/fmi_weather_dag.py` schedules ingestion every 15 minutes with basic retry settings.
+6. **Visualisation**: `visualization/app.py` renders latest tables and long-term series (temperature and humidity) via Streamlit.
 
-The goals of this project are:
+## Running locally
 
-    Collect weather data over the period of several days (there is no strict limit, you just need to have enough data to demonstrate that the pipeline works)
-    Process the raw data into daily tables of observations from active weather stations
-    Process daily data of selected stations into the time series of the most important parameters (temperature, humidity) from selected stations 
-    Visualise the most recent observations and longer time series
+### Prerequisites
+- Python 3.10+
+- Kafka broker available at `localhost:9092` (configurable via env var `KAFKA_BOOTSTRAP_SERVERS`)
+- Google Cloud credentials for BigQuery (if testing actual loads)
 
-Technical details of the ELT pipeline created in this project:
+Install dependencies:
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-Data model and pipeline DAG plan
+### Environment configuration
+Key environment variables:
+- `FMI_API_KEY`: FMI API key (optional for demo when `USE_SAMPLE_DATA=true`).
+- `USE_SAMPLE_DATA`: Set to `true` to use bundled sample observations instead of live FMI API calls.
+- `KAFKA_BOOTSTRAP_SERVERS`: Kafka bootstrap servers (default `localhost:9092`).
+- `KAFKA_TOPIC`: Kafka topic for observations (default `fmi_observations`).
+- `BIGQUERY_DATASET`: Dataset where tables are stored (default `fmi_weather`).
+- `STATION_WHITELIST`: Comma-separated list of station IDs that should receive long-term tables (default includes five Finnish stations).
 
-    Plan that includes all the steps of data processing
+### Producing and consuming observations
+Run the producer once to send observations into Kafka:
+```bash
+USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce
+```
 
-A Kafka data streaming tool that contains the following functionalities:
+Consume a batch and upload to BigQuery:
+```bash
+USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream consume --max-messages 200
+```
 
-    Kafka producer that uses the FMI api, gets the most recent data from all the stations and sends it to Kafka
-    Kafka consumer that receives the data and uploads it to BigQuery. It is probably better to upload BigQuery tables in bigger batches, like all the stations collected to a single dataframe, not message by message
+### Airflow
+Copy `dags/fmi_weather_dag.py` into your Airflow `dags/` folder. Set environment variables in Airflow for Kafka and BigQuery connectivity. The DAG schedules producer then consumer every 15 minutes.
 
-Data processing in BigQuery, scheduled by Airflow or Mage 
+### Streamlit demo
+The demo uses sample data by default.
+```bash
+USE_SAMPLE_DATA=true streamlit run visualization/app.py
+```
 
-    Daily processing of the data that has been updated to BigQuery
-        Removing possible duplicate rows
-        Investigate data quality, like missing data and possible outliers
-        Save results to daily tables of weather data. Each table contains multiple observations (rows) from each station.
-    After processing daily tables, update also long-term tables of selected stations (select at least five stations). Each of these five stations should have its own long-term table 
+## Testing transformations with sample data
+A pytest suite exercises the transformation utilities. Run:
+```bash
+python -m pip install pytest
+USE_SAMPLE_DATA=true pytest
+```
 
-Note that you don't have to run the pipeline over several days. It is enough if you can demonstrate how it works. 
-Visualization
-
-    Visualize both daily and long-term observations. You can show for example the most recent records of the selected stations or map view of all the stations, and long-term line plots of those stations.  Note that the visualization should simple show that your pipeline works. It is not part of the evaluation this time. You can use Streamlit, Google Looker studio, PowerBI, or any other visualization tool. 
+## Notes
+- Parsing of FMI XML responses is simplified by expecting GeoJSON-like input. For production use, replace `_parse_response` in `fmi_client.py` with a full WFS parser or use the official FMI Python client to generate JSON payloads.
+- BigQuery interactions depend on `pandas.DataFrame.to_gbq`; ensure the `pandas-gbq` extras are installed in your environment.
