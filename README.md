@@ -136,13 +136,14 @@ USE_SAMPLE_DATA=true streamlit run visualization/app.py
 
 The repository includes a Docker Compose setup that starts Kafka, creates the
 `fmi_observations` topic, and launches producer, consumer, and Streamlit
-containers.
+containers. Each service now builds against the requirements file that matches
+its role (worker vs. Streamlit) to avoid Airflow dependencies in the UI image.
 
 1. Build images and start the stack:
    ```bash
    docker compose up --build
    ```
-2. Access the Streamlit demo at http://localhpandas.DataFrame.to_gbqost:8501.
+2. Access the Streamlit demo at http://localhost:8501.
 
 Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run
