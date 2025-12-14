@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+env/
+venv/
+.dockerignore
+.git
+.gitignore
+*.egg-info
+build/
+dist/
+keys/bigquery/api_key.json
