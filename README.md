@@ -12,7 +12,7 @@ The pipeline uses a Kafka producer/consumer pair to capture raw observations, st
 
 ## Data model and DAG plan
 1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_latest()` to pull the most recent observations and publish them to Kafka.
-2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches and appends them to `fmi_weather.daily_observations` (dataset configurable via environment variables).
+2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches and appends them to `fmiweatherdatapipeline.fmi_weather.weather` (project, dataset, and table configurable via environment variables).
 3. **Daily processing**: 
    - Dedupe incoming rows on `(station_id, timestamp)`.
    - Run lightweight quality checks for missing values and outliers (functions in `transformations.py`).
@@ -35,13 +35,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Place your BigQuery API key or service account JSON file at `keys/bigquery/api_key.json`
+or point `BIGQUERY_API_KEY_PATH` to its location so the pipeline can authenticate
+to the `fmiweatherdatapipeline` project.
+
 ### Environment configuration
 Key environment variables:
 - `FMI_API_KEY`: FMI API key (optional for demo when `USE_SAMPLE_DATA=true`).
 - `USE_SAMPLE_DATA`: Set to `true` to use bundled sample observations instead of live FMI API calls.
 - `KAFKA_BOOTSTRAP_SERVERS`: Kafka bootstrap servers (default `localhost:9092`).
 - `KAFKA_TOPIC`: Kafka topic for observations (default `fmi_observations`).
+- `BIGQUERY_PROJECT`: BigQuery project ID (default `fmiweatherdatapipeline`).
 - `BIGQUERY_DATASET`: Dataset where tables are stored (default `fmi_weather`).
+- `BIGQUERY_DAILY_TABLE`: Table for daily loads (default `weather`).
+- `BIGQUERY_API_KEY_PATH`: Path to the BigQuery API key or service account JSON file (default `keys/bigquery/api_key.json`).
 - `STATION_WHITELIST`: Comma-separated list of station IDs that should receive long-term tables (default includes five Finnish stations).
 
 ### Producing and consuming observations

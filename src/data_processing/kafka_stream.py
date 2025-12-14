@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Iterable, List
 
 from kafka import KafkaConsumer, KafkaProducer
@@ -37,21 +38,49 @@ class ObservationProducer:
 
 
 class BigQuerySink:
-    def __init__(self, dataset: str | None = None):
+    def __init__(
+        self,
+        dataset: str | None = None,
+        project_id: str | None = None,
+        credentials_path: str | None = None,
+    ):
         self.dataset = dataset or CONFIG.bigquery_dataset
+        self.project_id = project_id or CONFIG.bigquery_project
         self.daily_table = CONFIG.daily_table
         self.station_whitelist = set(CONFIG.station_whitelist)
+        self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
 
         # BigQuery client is lazy-loaded to avoid dependency issues during unit tests
         self._bq_client = None
+        self._credentials = None
 
     @property
     def bq_client(self):
         if self._bq_client is None:  # pragma: no cover - requires google cloud
             from google.cloud import bigquery
 
-            self._bq_client = bigquery.Client()
+            self._bq_client = bigquery.Client(
+                project=self.project_id, credentials=self.credentials
+            )
         return self._bq_client
+
+    @property
+    def credentials(self):  # pragma: no cover - requires google cloud
+        if self._credentials is None and self.credentials_path:
+            path = Path(self.credentials_path).expanduser()
+            if path.exists():
+                from google.oauth2 import service_account
+
+                self._credentials = service_account.Credentials.from_service_account_file(
+                    path
+                )
+                LOGGER.info("Loaded BigQuery credentials from %s", path)
+            else:
+                LOGGER.warning(
+                    "BigQuery API key file not found at %s; default credentials will be used",
+                    path,
+                )
+        return self._credentials
 
     def _long_term_table(self, station_id: str) -> str:
         return f"{self.dataset}.{CONFIG.long_term_table_prefix}{station_id}"
@@ -62,8 +91,19 @@ class BigQuerySink:
             LOGGER.warning("Received empty batch; nothing to load")
             return 0
 
-        LOGGER.info("Loading %s rows to %s.%s", len(frame), self.dataset, self.daily_table)
-        frame.to_gbq(destination_table=f"{self.dataset}.{self.daily_table}", if_exists="append")
+        LOGGER.info(
+            "Loading %s rows to %s.%s in project %s",
+            len(frame),
+            self.dataset,
+            self.daily_table,
+            self.project_id,
+        )
+        frame.to_gbq(
+            destination_table=f"{self.dataset}.{self.daily_table}",
+            project_id=self.project_id,
+            credentials=self.credentials,
+            if_exists="append",
+        )
         self._update_long_term_tables(frame)
         return len(frame)
 
@@ -74,7 +114,12 @@ class BigQuerySink:
             if station_id not in self.station_whitelist:
                 continue
             table_name = self._long_term_table(station_id)
-            station_frame.to_gbq(destination_table=table_name, if_exists="append")
+            station_frame.to_gbq(
+                destination_table=table_name,
+                project_id=self.project_id,
+                credentials=self.credentials,
+                if_exists="append",
+            )
             LOGGER.info("Updated long-term table %s with %s rows", table_name, len(station_frame))
 
 
