@@ -71,6 +71,25 @@ The demo uses sample data by default.
 USE_SAMPLE_DATA=true streamlit run visualization/app.py
 ```
 
+### Running with Docker
+
+The repository includes a Docker Compose setup that starts Kafka, creates the
+`fmi_observations` topic, and launches producer, consumer, and Streamlit
+containers.
+
+1. Build images and start the stack:
+   ```bash
+   docker compose up --build
+   ```
+2. Access the Streamlit demo at http://localhost:8501.
+
+Environment notes:
+- The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run
+  without FMI API access.
+- For BigQuery loads, mount your service account key at
+  `./keys/bigquery/api_key.json` (the container expects it at
+  `/app/keys/bigquery/api_key.json`).
+
 ## Testing transformations with sample data
 A pytest suite exercises the transformation utilities. Run:
 ```bash
