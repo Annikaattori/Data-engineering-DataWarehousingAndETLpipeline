@@ -60,9 +60,19 @@ class BigQuerySink:
         if self._bq_client is None:  # pragma: no cover - requires google cloud
             from google.cloud import bigquery
 
-            self._bq_client = bigquery.Client(
-                project=self.project_id, credentials=self.credentials
-            )
+            try:
+                self._bq_client = bigquery.Client(
+                    project=self.project_id, credentials=self.credentials
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                LOGGER.error(
+                    "Failed to initialise BigQuery client for project %s using credentials %s: %s. "
+                    "Ensure the service account has BigQuery access and that the network can reach the BigQuery API.",
+                    self.project_id,
+                    self.credentials_path or "application default credentials",
+                    exc,
+                )
+                raise
         return self._bq_client
 
     @property
@@ -72,13 +82,22 @@ class BigQuerySink:
             if path.exists():
                 from google.oauth2 import service_account
 
-                self._credentials = service_account.Credentials.from_service_account_file(
-                    path
-                )
-                LOGGER.info("Loaded BigQuery credentials from %s", path)
+                try:
+                    self._credentials = (
+                        service_account.Credentials.from_service_account_file(path)
+                    )
+                    LOGGER.info("Loaded BigQuery credentials from %s", path)
+                except Exception as exc:  # pylint: disable=broad-except
+                    LOGGER.error(
+                        "Unable to parse BigQuery credentials at %s: %s. Confirm the file is a valid service account JSON.",
+                        path,
+                        exc,
+                    )
+                    raise
             else:
-                LOGGER.warning(
-                    "BigQuery API key file not found at %s; default credentials will be used",
+                LOGGER.error(
+                    "BigQuery API key file not found at %s; default credentials will be used if available. "
+                    "Set BIGQUERY_API_KEY_PATH or mount the service account file for reliable uploads.",
                     path,
                 )
         return self._credentials
@@ -132,7 +151,13 @@ class BigQuerySink:
             )
         except Exception as exc:  # pylint: disable=broad-except
             LOGGER.error(
-                "Failed to upload %s rows to %s: %s", len(frame), destination_table, exc
+                "Failed to upload %s rows to %s in project %s using credentials %s: %s. "
+                "Verify that the dataset exists and that the account has bigquery.dataEditor access.",
+                len(frame),
+                destination_table,
+                self.project_id,
+                self.credentials_path or "application default credentials",
+                exc,
             )
             raise
 
