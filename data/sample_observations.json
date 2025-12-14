@@ -1,0 +1,50 @@
+[
+  {
+    "station_id": "101104",
+    "station_name": "Helsinki Kaisaniemi",
+    "timestamp": "2024-06-01T10:00:00Z",
+    "temperature": 12.4,
+    "humidity": 63.0,
+    "wind_speed": 4.1
+  },
+  {
+    "station_id": "101104",
+    "station_name": "Helsinki Kaisaniemi",
+    "timestamp": "2024-06-01T10:10:00Z",
+    "temperature": 12.6,
+    "humidity": 62.5,
+    "wind_speed": 4.4
+  },
+  {
+    "station_id": "100968",
+    "station_name": "Turku Artukainen",
+    "timestamp": "2024-06-01T10:00:00Z",
+    "temperature": 11.2,
+    "humidity": 68.0,
+    "wind_speed": 3.2
+  },
+  {
+    "station_id": "100946",
+    "station_name": "Tampere Pirkkala",
+    "timestamp": "2024-06-01T10:00:00Z",
+    "temperature": 10.8,
+    "humidity": 70.4,
+    "wind_speed": 2.9
+  },
+  {
+    "station_id": "102172",
+    "station_name": "Oulu Oulunsalo",
+    "timestamp": "2024-06-01T10:00:00Z",
+    "temperature": 9.6,
+    "humidity": 74.2,
+    "wind_speed": 5.1
+  },
+  {
+    "station_id": "101932",
+    "station_name": "Kuopio Savilahti",
+    "timestamp": "2024-06-01T10:00:00Z",
+    "temperature": 8.1,
+    "humidity": 77.5,
+    "wind_speed": 3.8
+  }
+]
