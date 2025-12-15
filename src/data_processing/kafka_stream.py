@@ -49,7 +49,7 @@ class BigQuerySink:
         self.project_id = project_id or CONFIG.bigquery_project
         self.daily_table = CONFIG.daily_table
         self.station_whitelist = set(CONFIG.station_whitelist)
-        self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
+        self.credentials_path = credentials_path or CONFIG.bigquery_api_path
 
         # BigQuery client is lazy-loaded to avoid dependency issues during unit tests
         self._bq_client = None
@@ -212,7 +212,9 @@ class ObservationConsumer:
             enable_auto_commit=True,
             group_id=group_id,
             auto_offset_reset="earliest",
+            consumer_timeout_ms=5000,  # lopettaa jos 5s ei tule uusia viestejä
         )
+
         self.sink = BigQuerySink()
 
     def consume_once(self, max_messages: int = 200) -> int:
@@ -237,12 +239,13 @@ def _cli():  # pragma: no cover - convenience entrypoint
     parser = argparse.ArgumentParser(description="Kafka streaming utilities for FMI observations")
     parser.add_argument("action", choices=["produce", "consume"], help="Whether to fetch and publish or consume a batch")
     parser.add_argument("--max-messages", type=int, default=200, help="Number of messages to read when consuming")
+    parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
     args = parser.parse_args()
 
     if args.action == "produce":
         ObservationProducer().publish_latest()
     else:
-        ObservationConsumer().consume_once(max_messages=args.max_messages)
+        ObservationConsumer(group_id=args.group_id).consume_once(max_messages=args.max_messages)
 
 
 if __name__ == "__main__":

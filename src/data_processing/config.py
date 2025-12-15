@@ -9,8 +9,13 @@ from typing import List
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_BIGQUERY_KEY_PATH = BASE_DIR / "keys" / "bigquery" / "api_key.json"
+DEFAULT_BIGQUERY_KEY_PATH = "/app/keys/bigquery/api_key.json"
 
+bigquery_api_key_path: str | None = (
+    os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    or os.getenv("BIGQUERY_API_KEY_PATH")
+    or DEFAULT_BIGQUERY_KEY_PATH
+)
 
 def _list_from_env(env_value: str | None) -> List[str]:
     if not env_value:
@@ -37,7 +42,10 @@ class PipelineConfig:
     )
     daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
     long_term_table_prefix: str = os.getenv("BIGQUERY_LONG_TERM_PREFIX", "station_")
-    station_whitelist: list[str] = field(default_factory=list)
+    station_whitelist: list[str] = field(default_factory=list) 
+    #station_whitelist: list[str] = field(
+    #default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))
+#)
     use_sample_data: bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
 
 

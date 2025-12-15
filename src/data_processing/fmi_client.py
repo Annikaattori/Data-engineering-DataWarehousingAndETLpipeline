@@ -90,7 +90,7 @@ def observations_as_dataframe(observations: Iterable[Observation]):
         return frame
 
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-    frame["date"] = frame["timestamp"].dt.date
+    # Älä lisää "date"-saraketta, koska se tuottaa datetime.date-olioita ja rikkoo to_gbq:n
     frame.sort_values(["station_id", "timestamp"], inplace=True)
     return frame
 
