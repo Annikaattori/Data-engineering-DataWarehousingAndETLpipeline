@@ -42,10 +42,17 @@ class PipelineConfig:
     )
     daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
     long_term_table_prefix: str = os.getenv("BIGQUERY_LONG_TERM_PREFIX", "station_")
-    station_whitelist: list[str] = field(default_factory=list) 
-    #station_whitelist: list[str] = field(
-    #default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))
-#)
+    station_whitelist: list[str] = field(
+        default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))
+        or [
+            # Sensible defaults so demos render long-term charts without extra env vars
+            "101104",  # Helsinki Kaisaniemi
+            "100968",  # Turku Artukainen
+            "100946",  # Tampere Pirkkala
+            "102172",  # Oulu Oulunsalo
+            "101932",  # Kuopio Savilahti
+        ]
+    )
     use_sample_data: bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
 
 
