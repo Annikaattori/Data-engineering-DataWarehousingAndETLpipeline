@@ -10,6 +10,7 @@ from kafka import KafkaConsumer, KafkaProducer
 
 from .config import CONFIG
 from .fmi_client import FMIClient, Observation, observations_as_dataframe
+from . import transformations
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,6 +169,8 @@ class BigQuerySink:
         if frame.empty:
             LOGGER.warning("Received empty batch; nothing to load")
             return 0
+
+        frame = transformations.prepare_for_bigquery(frame)
 
         destination_table = f"{self.dataset}.{self.daily_table}"
         LOGGER.info(
