@@ -55,7 +55,8 @@ services:
     volumes:
       - ./keys:/app/keys:ro
     command: ["python", "-m", "src.data_processing.kafka_stream", "produce"]
-    restart: unless-stopped
+    restart: "no"
+
 
   consumer:
     build:
@@ -77,7 +78,7 @@ services:
     volumes:
       - ./keys:/app/keys:ro
     command: ["python", "-m", "src.data_processing.kafka_stream", "consume", "--max-messages", "5"]
-    restart: unless-stopped
+    restart: "no"
 
   streamlit:
     build:

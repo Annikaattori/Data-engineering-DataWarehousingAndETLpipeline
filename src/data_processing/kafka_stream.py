@@ -50,7 +50,7 @@ class BigQuerySink:
         self.project_id = project_id or CONFIG.bigquery_project
         self.daily_table = CONFIG.daily_table
         self.station_whitelist = set(CONFIG.station_whitelist)
-        self.credentials_path = credentials_path or CONFIG.bigquery_api_path
+        self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
 
         # BigQuery client is lazy-loaded to avoid dependency issues during unit tests
         self._bq_client = None
