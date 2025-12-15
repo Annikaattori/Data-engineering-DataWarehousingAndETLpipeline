@@ -160,6 +160,257 @@ Environment notes:
   ```
   This cleanly halts Kafka, producer, consumer, and Streamlit containers.
 
+## Dev Runbook (Docker Compose)
+
+This runbook lists the exact commands to run in common situations (normal run, after code changes, and troubleshooting).
+
+### 1) Normal usage
+
+#### Start the full stack (build + run)
+```bash
+docker compose up -d --build
+```
+
+#### Check status
+
+```bash
+docker compose ps
+```
+
+#### Follow all logs
+
+```bash
+docker compose logs -f
+```
+
+---
+
+### 2) After code changes
+
+#### A) Changed Streamlit UI (`visualization/…`)
+
+Rebuild and recreate only Streamlit:
+
+```bash
+docker compose up -d --build --force-recreate streamlit
+```
+
+If it still looks like old code (cache):
+
+```bash
+docker compose build --no-cache streamlit
+docker compose up -d --force-recreate streamlit
+```
+
+Logs:
+
+```bash
+docker compose logs -f streamlit
+```
+
+#### B) Changed worker code (`src/…`) affecting producer/consumer
+
+```bash
+docker compose up -d --build --force-recreate producer consumer
+```
+
+Logs:
+
+```bash
+docker compose logs -f producer
+docker compose logs -f consumer
+```
+
+Only consumer changed:
+
+```bash
+docker compose up -d --build --force-recreate consumer
+```
+
+#### C) Changed only `docker-compose.yml`
+
+Usually enough:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+If build args / requirements / Dockerfile also changed:
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+---
+
+### 3) Recommended dev workflow: infra as services, jobs as one-shots
+
+Producer/consumer are often easiest to run as one-shot jobs during development.
+
+#### Start only infrastructure
+
+```bash
+docker compose up -d broker init-topics
+```
+
+#### Run producer once
+
+```bash
+docker compose run --rm producer
+```
+
+#### Run consumer once (example: 5 messages)
+
+```bash
+docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 5
+```
+
+---
+
+### 4) BigQuery checks
+
+#### Confirm the key file exists inside the container
+
+```bash
+docker compose exec -T consumer ls -l /app/keys/bigquery/api_key.json
+```
+
+#### Count rows in the daily table
+
+```bash
+docker compose exec -T consumer python - <<'PY'
+import pandas_gbq
+q = "SELECT COUNT(*) AS n FROM `fmiweatherdatapipeline.fmi_weather.weather`"
+print(pandas_gbq.read_gbq(q, project_id="fmiweatherdatapipeline"))
+PY
+```
+
+#### List tables in the dataset
+
+```bash
+docker compose exec -T consumer python - <<'PY'
+import pandas_gbq
+q = """
+SELECT table_name
+FROM `fmiweatherdatapipeline.fmi_weather.INFORMATION_SCHEMA.TABLES`
+ORDER BY table_name
+"""
+print(pandas_gbq.read_gbq(q, project_id="fmiweatherdatapipeline"))
+PY
+```
+
+---
+
+### 5) Kafka checks
+
+#### Read 5 messages from the topic (proof that data exists)
+
+```bash
+docker compose exec broker /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server broker:29092 \
+  --topic fmi_observations \
+  --from-beginning \
+  --max-messages 5
+```
+
+#### Check consumer group offsets / lag
+
+```bash
+docker compose exec broker /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server broker:29092 \
+  --describe \
+  --group fmi-ingestion
+```
+
+#### If consumer prints "No messages read…", reset offsets to earliest
+
+1. Stop consumer:
+
+```bash
+docker compose stop consumer
+```
+
+2. Reset offsets:
+
+```bash
+docker compose exec broker /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server broker:29092 \
+  --group fmi-ingestion \
+  --topic fmi_observations \
+  --reset-offsets --to-earliest --execute
+```
+
+3. Run consumer again (one-shot):
+
+```bash
+docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 5
+```
+
+---
+
+### 6) Troubleshooting quick fixes
+
+#### A) "Container name already in use"
+
+```bash
+docker rm -f broker init-topics producer consumer streamlit 2>/dev/null || true
+docker compose up -d
+```
+
+#### B) Port 9092 already allocated
+
+Check what is using 9092:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}"
+```
+
+Stop/remove the container that binds `0.0.0.0:9092->…`.
+
+#### C) "the input device is not a TTY" (heredoc / piping)
+
+Use `-T`:
+
+```bash
+docker compose exec -T consumer python - <<'PY'
+print("ok")
+PY
+```
+
+#### D) BuildKit snapshot/layer errors (e.g., "parent snapshot does not exist")
+
+```bash
+docker builder prune -af
+docker compose build --no-cache
+docker compose up -d --force-recreate
+```
+
+#### E) Producer shows "Restarting (0)"
+
+Exit code 0 means it is a one-shot job and restart policy is re-running it. Prefer running it via:
+
+```bash
+docker compose run --rm producer
+```
+
+---
+
+### 7) Clean start (project scope)
+
+#### Remove containers, networks, volumes and rebuild from scratch
+
+```bash
+docker compose down --remove-orphans --volumes
+docker compose build --no-cache
+docker compose up -d --force-recreate
+```
+
+#### Full Docker cleanup (removes unused containers/images/volumes)
+
+```bash
+docker system prune -af --volumes
+```
+
 ## Testing transformations with sample data
 A pytest suite exercises the transformation utilities. Run:
 ```bash
