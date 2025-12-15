@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 pandas = pytest.importorskip("pandas")
+pd = pandas
 
 from src.data_processing import transformations
 from src.data_processing.fmi_client import observations_as_dataframe
@@ -47,3 +48,36 @@ def test_long_term_tables():
     assert set(tables.keys()) == {"101104", "100968"}
     for table in tables.values():
         assert list(table.columns) == list(frame.columns)
+
+
+def test_apply_bigquery_schema_orders_and_casts_columns():
+    frame = load_sample_frame()
+    frame["station_id"] = frame["station_id"].astype(int)
+
+    formatted = transformations.apply_bigquery_schema(frame)
+
+    assert list(formatted.columns) == [
+        "station_id",
+        "station_name",
+        "timestamp",
+        "temperature",
+        "humidity",
+        "wind_speed",
+    ]
+    assert formatted["station_id"].iloc[0] == "101104"
+    assert str(formatted["timestamp"].dtype).startswith("datetime64[ns, UTC]")
+
+
+def test_prepare_for_bigquery_handles_missing_and_duplicates():
+    frame = load_sample_frame()
+    # duplicate first row and introduce a missing required field
+    duplicated = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
+    duplicated.loc[1, "station_id"] = pd.NA
+
+    cleaned = transformations.prepare_for_bigquery(duplicated)
+
+    assert len(cleaned) == len(frame)  # one missing + one duplicate removed
+    assert cleaned["station_id"].isna().sum() == 0
+    assert cleaned.drop_duplicates(subset=["station_id", "timestamp"]).shape[0] == len(
+        cleaned
+    )
