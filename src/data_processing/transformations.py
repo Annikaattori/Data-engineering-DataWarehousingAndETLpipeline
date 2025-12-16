@@ -30,6 +30,27 @@ BIGQUERY_SCHEMA = [
         "fields": [],
     },
     {
+        "name": "latitude",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "longitude",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "elevation",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "Station elevation (metres)",
+        "fields": [],
+    },
+    {
         "name": "timestamp",
         "mode": "REQUIRED",
         "type": "TIMESTAMP",
@@ -124,6 +145,9 @@ def apply_bigquery_schema(frame: pd.DataFrame) -> pd.DataFrame:
     typed = frame.copy()
     typed["station_id"] = typed["station_id"].astype(str)
     typed["station_name"] = typed.get("station_name", pd.NA)
+    typed["latitude"] = pd.to_numeric(typed.get("latitude", pd.NA), errors="coerce")
+    typed["longitude"] = pd.to_numeric(typed.get("longitude", pd.NA), errors="coerce")
+    typed["elevation"] = pd.to_numeric(typed.get("elevation", pd.NA), errors="coerce")
     typed["timestamp"] = pd.to_datetime(typed["timestamp"], utc=True)
 
     for column in ["temperature", "humidity", "wind_speed"]:

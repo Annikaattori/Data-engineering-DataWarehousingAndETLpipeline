@@ -4,6 +4,8 @@ This repository demonstrates an ELT pipeline for ingesting Finnish Meteorologica
 
 The pipeline uses a Kafka producer/consumer pair to capture raw observations, stores them in BigQuery, and relies on Airflow orchestration. A Streamlit app is included to showcase the latest and long-term views with bundled offline sample data.
 
+Live FMI access uses [`fmi-weather-client`](https://pypi.org/project/fmi-weather-client/) so that observations come from `observation_by_station_id` and forecasts can be pulled with `forecast_by_place_name`, matching the official usage examples from the library documentation. Forecast retrieval can target any supplied list of places and is filtered to the last three years when using the helper in this repository.
+
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
 - `dags/`: Airflow DAG that chains producer and consumer tasks.
@@ -11,15 +13,28 @@ The pipeline uses a Kafka producer/consumer pair to capture raw observations, st
 - `data/sample_observations.json`: Sample observations for offline testing.
 
 ## Data model and DAG plan
-1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_latest()` to pull the most recent observations and publish them to Kafka.
-2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches and appends them to `fmiweatherdatapipeline.fmi_weather.weather` (project, dataset, and table configurable via environment variables).
-3. **Daily processing**: 
-   - Dedupe incoming rows on `(station_id, timestamp)`.
-   - Run lightweight quality checks for missing values and outliers (functions in `transformations.py`).
-   - Persist deduped daily data.
-4. **Long-term history**: After each batch load, append records for selected stations into individual `station_<id>` tables for easier time-series access.
-5. **Orchestration**: `dags/fmi_weather_dag.py` schedules ingestion every 15 minutes with basic retry settings.
-6. **Visualisation**: `visualization/app.py` renders latest tables and long-term series (temperature and humidity) via Streamlit.
+**Observation schema** (mirrors `transformations.BIGQUERY_SCHEMA`):
+- `station_id` (STRING, required)
+- `station_name` (STRING)
+- `latitude` (FLOAT)
+- `longitude` (FLOAT)
+- `elevation` (FLOAT)
+- `timestamp` (TIMESTAMP, required)
+- `temperature` (FLOAT)
+- `humidity` (FLOAT)
+- `wind_speed` (FLOAT)
+
+**Tables**
+- **Daily table**: `fmi_weather.weather` (dataset/table configurable via env vars). Receives deduped, schema-aligned rows for all stations in the batch.
+- **Long-term tables**: one table per whitelisted station (`station_<id>` prefix from `CONFIG.long_term_table_prefix`), populated after each daily load for the configured five default stations.
+
+**DAG steps**
+1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_latest()` to pull the most recent observations using `fmi-weather-client`’s `observation_by_station_id` for each whitelisted station (or sample fixtures when `USE_SAMPLE_DATA=true`). Results are published to Kafka.
+2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches, converts them with `observations_as_dataframe`, and writes to `fmiweatherdatapipeline.fmi_weather.weather` (project/dataset/table names overrideable via environment variables).
+3. **Daily processing**: `transformations.prepare_for_bigquery` applies schema coercion, drops rows missing required fields, deduplicates on `(station_id, timestamp)`, and keeps column ordering stable for BigQuery uploads.
+4. **Long-term history**: After the daily load, `BigQuerySink` appends the same batch to per-station long-term tables for the configured whitelist to support time-series visualisations.
+5. **Orchestration**: `dags/fmi_weather_dag.py` triggers producer then consumer every 15 minutes with a single retry, matching the Kafka-first ingestion model used in the code.
+6. **Visualisation**: `visualization/app.py` renders latest tables and long-term series (temperature and humidity) via Streamlit. It can run entirely on the bundled sample data when Kafka/BigQuery are unavailable.
 
 ## ETL/ELT architecture at a glance
 
@@ -106,11 +121,37 @@ Key environment variables:
 - `USE_SAMPLE_DATA`: Set to `true` to use bundled sample observations instead of live FMI API calls.
 - `KAFKA_BOOTSTRAP_SERVERS`: Kafka bootstrap servers (default `localhost:9092`).
 - `KAFKA_TOPIC`: Kafka topic for observations (default `fmi_observations`).
+- `FORECAST_PLACES`: Comma-separated list of place names to pull forecasts for when using the forecast helper (defaults to none, meaning you can supply places directly when calling `fetch_forecasts_last_three_years`).
 - `BIGQUERY_PROJECT`: BigQuery project ID (default `fmiweatherdatapipeline`).
 - `BIGQUERY_DATASET`: Dataset where tables are stored (default `fmi_weather`).
 - `BIGQUERY_DAILY_TABLE`: Table for daily loads (default `weather`).
 - `BIGQUERY_API_KEY_PATH`: Path to the BigQuery API key or service account JSON file (default `keys/bigquery/api_key.json`).
 - `STATION_WHITELIST`: Comma-separated list of station IDs that should receive long-term tables (default includes five Finnish stations).
+
+### Connecting to the FMI API
+Live FMI access is handled via [`fmi-weather-client`](https://pypi.org/project/fmi-weather-client/), which wraps FMI's HTTP endpoints and exposes the documented helpers:
+
+- `weather_by_place_name(place_name)` / `weather_by_coordinates(latitude, longitude)`
+- `observation_by_station_id(fmi_station_id)` / `observation_by_place(place_name)`
+- `forecast_by_place_name(place_name, timestep_hours=24, forecast_points=4)` / `forecast_by_coordinates(latitude, longitude, ...)`
+
+In this repository, `FMIClient` uses `observation_by_station_id` to hydrate the Kafka producer and `forecast_by_place_name` for optional forecast pulls. To enable live calls instead of fixtures, set `FMI_API_KEY` and ensure your network can reach FMI. When running via Docker Compose, the environment variable is passed through to both producer and consumer containers, and the services use `SIGINT` plus a 20s grace period on shutdown so HTTP sessions are closed cleanly when you run `docker compose down`.
+
+### How observations are cleaned before BigQuery
+Before loading a batch into BigQuery, the consumer applies `transformations.prepare_for_bigquery` to the Pandas dataframe built from Kafka messages. The cleaning logic is deterministic so data is easy to reason about:
+
+1. **Schema coercion** (`apply_bigquery_schema`)
+   - Convert timestamps to UTC `datetime` and cast IDs to strings.
+   - Ensure numeric columns (`temperature`, `humidity`, `wind_speed`) are floats, coercing invalid values to `NaN` so they can be filtered or inspected.
+   - Reorder columns to match `BIGQUERY_SCHEMA`, filling any missing optional columns with `pd.NA` so uploads stay stable if upstream payloads change.
+2. **Required-field filtering**
+   - Drop any rows missing `station_id` or `timestamp` so BigQuery constraints are satisfied and join keys remain usable.
+3. **Deduplication**
+   - Drop duplicate rows sharing the same `(station_id, timestamp)` key to avoid inflating daily tables when Kafka retries or multiple producers overlap.
+4. **Quality monitoring (optional helpers)**
+   - `detect_missing_values` summarizes column-level null counts, and `detect_outliers` flags extreme numeric values via configurable z-scores. These are available for Airflow/Mage quality checks but do not block loads by default.
+
+The resulting, ordered dataframe is what `BigQuerySink` writes to the daily table and per-station long-term tables.
 
 ### Producing and consuming observations
 Run the producer once to send observations into Kafka:
@@ -419,5 +460,6 @@ USE_SAMPLE_DATA=true pytest
 ```
 
 ## Notes
-- Parsing of FMI XML responses is simplified by expecting GeoJSON-like input. For production use, replace `_parse_response` in `fmi_client.py` with a full WFS parser or use the official FMI Python client to generate JSON payloads.
+- Live data uses `fmi-weather-client` helpers such as `observation_by_station_id` and `forecast_by_place_name`; the bundled sample observations remain available when `USE_SAMPLE_DATA=true`.
+- Forecast retrieval is centralized in `FMIClient.fetch_forecasts_last_three_years`, which accepts any list of place names and filters returned timestamps to the trailing three years.
 - BigQuery interactions depend on `pandas.DataFrame.to_gbq`; ensure the `pandas-gbq` extras are installed in your environment.

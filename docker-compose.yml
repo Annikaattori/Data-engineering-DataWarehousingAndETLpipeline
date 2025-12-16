@@ -51,10 +51,13 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: "broker:29092"
       KAFKA_TOPIC: "fmi_observations"
+      FMI_API_KEY: "${FMI_API_KEY:-}"
       USE_SAMPLE_DATA: "true"
     volumes:
       - ./keys:/app/keys:ro
     command: ["python", "-m", "src.data_processing.kafka_stream", "produce"]
+    stop_signal: SIGINT
+    stop_grace_period: 20s
     restart: "no"
 
 
@@ -70,6 +73,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: "broker:29092"
       KAFKA_TOPIC: "fmi_observations"
+      FMI_API_KEY: "${FMI_API_KEY:-}"
       BIGQUERY_PROJECT: "fmiweatherdatapipeline"
       BIGQUERY_DATASET: "fmi_weather"
       BIGQUERY_DAILY_TABLE: "weather"
@@ -78,6 +82,8 @@ services:
     volumes:
       - ./keys:/app/keys:ro
     command: ["python", "-m", "src.data_processing.kafka_stream", "consume", "--max-messages", "5"]
+    stop_signal: SIGINT
+    stop_grace_period: 20s
     restart: "no"
 
   streamlit:

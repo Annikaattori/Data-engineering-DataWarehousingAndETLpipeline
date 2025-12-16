@@ -53,6 +53,9 @@ class PipelineConfig:
             "101932",  # Kuopio Savilahti
         ]
     )
+    forecast_places: list[str] = field(
+        default_factory=lambda: _list_from_env(os.getenv("FORECAST_PLACES"))
+    )
     use_sample_data: bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
 
 

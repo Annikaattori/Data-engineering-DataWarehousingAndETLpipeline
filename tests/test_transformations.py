@@ -59,6 +59,9 @@ def test_apply_bigquery_schema_orders_and_casts_columns():
     assert list(formatted.columns) == [
         "station_id",
         "station_name",
+        "latitude",
+        "longitude",
+        "elevation",
         "timestamp",
         "temperature",
         "humidity",
