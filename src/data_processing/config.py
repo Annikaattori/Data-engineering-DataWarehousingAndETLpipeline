@@ -41,7 +41,7 @@ class PipelineConfig:
         DEFAULT_BIGQUERY_KEY_PATH
     )
     daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
-    long_term_table_prefix: str = os.getenv("BIGQUERY_LONG_TERM_PREFIX", "station_")
+    long_term_table: str = os.getenv("BIGQUERY_LONG_TERM_TABLE", "weather_history")
     station_whitelist: list[str] = field(
         default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))
         or [

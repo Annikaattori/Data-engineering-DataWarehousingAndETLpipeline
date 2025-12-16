@@ -4,7 +4,7 @@ This repository demonstrates an ELT pipeline for ingesting Finnish Meteorologica
 
 The pipeline uses a Kafka producer/consumer pair to capture raw observations, stores them in BigQuery, and relies on Airflow orchestration. A Streamlit app is included to showcase the latest and long-term views with bundled offline sample data.
 
-Live FMI access uses [`fmi-weather-client`](https://pypi.org/project/fmi-weather-client/) so that observations come from `observation_by_station_id` and forecasts can be pulled with `forecast_by_place_name`, matching the official usage examples from the library documentation. Forecast retrieval can target any supplied list of places and is filtered to the last three years when using the helper in this repository.
+Live FMI access uses [`fmi-weather-client`](https://pypi.org/project/fmi-weather-client/) so that observations come from `observation_by_station_id` and forecasts can be pulled with `forecast_by_place_name`, matching the official usage examples from the library documentation. Forecast retrieval can target any supplied list of places and is filtered to the last three years when using the helper in this repository. Historical observation loading still spans 2022 onward, while sample fixtures are downsampled to hourly timestamps for lightweight local runs.
 
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
@@ -26,13 +26,13 @@ Live FMI access uses [`fmi-weather-client`](https://pypi.org/project/fmi-weather
 
 **Tables**
 - **Daily table**: `fmi_weather.weather` (dataset/table configurable via env vars). Receives deduped, schema-aligned rows for all stations in the batch.
-- **Long-term tables**: one table per whitelisted station (`station_<id>` prefix from `CONFIG.long_term_table_prefix`), populated after each daily load for the configured five default stations.
+- **Long-term table**: a single consolidated history table (`CONFIG.long_term_table`) populated after each daily load for the configured five default stations.
 
 **DAG steps**
-1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_latest()` to pull the most recent observations using `fmi-weather-client`’s `observation_by_station_id` for each whitelisted station (or sample fixtures when `USE_SAMPLE_DATA=true`). Results are published to Kafka.
-2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages in batches, converts them with `observations_as_dataframe`, and writes to `fmiweatherdatapipeline.fmi_weather.weather` (project/dataset/table names overrideable via environment variables).
+1. **Ingestion**: `ObservationProducer` (`src/data_processing/kafka_stream.py`) calls `FMIClient.fetch_last_three_years()` to pull observations from 2022 onward using `fmi-weather-client`’s `observations_by_station_id` for each whitelisted station. When `USE_SAMPLE_DATA=true`, sample fixtures are filtered to hourly readings to keep the ingest lightweight. Results are published to Kafka.
+2. **Landing in BigQuery**: `ObservationConsumer` reads Kafka messages until the topic is empty, converts them with `observations_as_dataframe`, and writes to `fmiweatherdatapipeline.fmi_weather.weather` (project/dataset/table names overrideable via environment variables).
 3. **Daily processing**: `transformations.prepare_for_bigquery` applies schema coercion, drops rows missing required fields, deduplicates on `(station_id, timestamp)`, and keeps column ordering stable for BigQuery uploads.
-4. **Long-term history**: After the daily load, `BigQuerySink` appends the same batch to per-station long-term tables for the configured whitelist to support time-series visualisations.
+4. **Long-term history**: After the daily load, `BigQuerySink` appends the same batch to a single consolidated long-term table for the configured whitelist to support time-series visualisations.
 5. **Orchestration**: `dags/fmi_weather_dag.py` triggers producer then consumer every 15 minutes with a single retry, matching the Kafka-first ingestion model used in the code.
 6. **Visualisation**: `visualization/app.py` renders latest tables and long-term series (temperature and humidity) via Streamlit. It can run entirely on the bundled sample data when Kafka/BigQuery are unavailable.
 
@@ -62,7 +62,7 @@ flowchart LR
     subgraph Storage
         BQ["BigQuery Dataset (fmi_weather)"]
         DailyTable["Daily Table (weather)"]
-        LongTerm["Station Tables (station_id)"]
+        LongTerm["Long-term Table (weather_history)"]
     end
 
     subgraph Visualization

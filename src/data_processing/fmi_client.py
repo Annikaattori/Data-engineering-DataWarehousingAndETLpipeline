@@ -163,12 +163,12 @@ class FMIClient:
                 observations.append(observation)
         return observations
 
-    def _filter_three_year_window(self, observations: List[Observation]) -> List[Observation]:
+    def _filter_window(
+        self, observations: List[Observation], start: datetime, end: datetime
+    ) -> List[Observation]:
         if not observations:
             return []
 
-        three_years_ago = datetime.now(timezone.utc) - timedelta(days=365 * 3)
-        now = datetime.now(timezone.utc)
         filtered: List[Observation] = []
         for obs in observations:
             timestamp = obs.get("timestamp")
@@ -185,7 +185,7 @@ class FMIClient:
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
 
-            if three_years_ago <= parsed <= now:
+            if start <= parsed <= end:
                 filtered.append(obs)
         return filtered
 
@@ -208,8 +208,37 @@ class FMIClient:
                 observations.append(observation)
         return observations
 
+    def _filter_hourly(self, observations: List[Observation]) -> List[Observation]:
+        if not observations:
+            return []
+
+        hourly: List[Observation] = []
+        seen: set[tuple[str, datetime]] = set()
+        for obs in observations:
+            timestamp = obs.get("timestamp")
+            if not timestamp:
+                continue
+
+            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(cleaned_timestamp)
+            except ValueError:
+                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
+                continue
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+
+            if parsed.minute == 0 and parsed.second == 0:
+                key = (str(obs.get("station_id")), parsed)
+                if key not in seen:
+                    hourly.append(obs)
+                    seen.add(key)
+
+        return hourly
+
     def fetch_last_three_years(self) -> List[Observation]:
-        """Return historical observations for whitelisted stations."""
+        """Return historical observations starting from 2022 with sample data reduced to hourly."""
 
         now = datetime.now(timezone.utc)
         if self.__class__._history_fetched_at and now - self.__class__._history_fetched_at < self._history_ttl:
@@ -219,22 +248,23 @@ class FMIClient:
             )
             return list(self.__class__._history_cache)
 
-        start = datetime.now(timezone.utc) - timedelta(days=365 * 3)
+        start = datetime(2022, 1, 1, tzinfo=timezone.utc)
         end = now
 
         if self.use_sample_data:
             sample_path = DATA_DIR / "sample_observations.json"
             with sample_path.open("r", encoding="utf-8") as file:
                 sample = json.load(file)
-            filtered_sample = self._filter_three_year_window(sample)
-            self.__class__._history_cache = filtered_sample
+            filtered_sample = self._filter_window(sample, start, end)
+            hourly_sample = self._filter_hourly(filtered_sample)
+            self.__class__._history_cache = hourly_sample
             self.__class__._history_fetched_at = now
-            return filtered_sample
+            return hourly_sample
 
         observations: List[Observation] = []
         for station_id in self.station_ids:
             history = self._fetch_station_observation_history(station_id, start, end)
-            observations.extend(self._filter_three_year_window(history))
+            observations.extend(self._filter_window(history, start, end))
         self.__class__._history_cache = observations
         self.__class__._history_fetched_at = now
         return observations
