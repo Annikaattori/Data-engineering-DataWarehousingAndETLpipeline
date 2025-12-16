@@ -86,6 +86,33 @@ services:
     stop_grace_period: 20s
     restart: "no"
 
+  hourly-ingestor:
+    build:
+      context: .
+      args:
+        REQUIREMENTS_FILE: requirements-worker.txt
+    container_name: hourly-ingestor
+    environment:
+      FMI_API_KEY: "${FMI_API_KEY:-}"
+      BIGQUERY_PROJECT: "fmiweatherdatapipeline"
+      BIGQUERY_DATASET: "fmi_weather"
+      BIGQUERY_HOURLY_TABLE: "weather_hourly_samples"
+      BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
+    volumes:
+      - ./keys:/app/keys:ro
+    command: [
+      "python",
+      "-m",
+      "src.data_processing.kafka_stream",
+      "bootstrap-hourly",
+      "--interval-seconds",
+      "3600",
+    ]
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+    restart: unless-stopped
+
   streamlit:
     build:
       context: .
