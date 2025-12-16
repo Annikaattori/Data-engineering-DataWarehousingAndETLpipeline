@@ -263,8 +263,8 @@ class FMIClient:
         latest = self.fetch_latest()
         return self._downsample_hourly(latest)
 
-    def fetch_last_three_years(self) -> List[Observation]:
-        """Return historical observations starting from 2022 with sample data reduced to hourly."""
+    def fetch_last_year_hourly(self) -> List[Observation]:
+        """Return hourly observations covering the last 365 days."""
 
         now = datetime.now(timezone.utc)
         if self.__class__._history_fetched_at and now - self.__class__._history_fetched_at < self._history_ttl:
@@ -274,7 +274,7 @@ class FMIClient:
             )
             return list(self.__class__._history_cache)
 
-        start = datetime(2022, 1, 1, tzinfo=timezone.utc)
+        start = now - timedelta(days=365)
         end = now
 
         if self.use_sample_data:
@@ -291,31 +291,11 @@ class FMIClient:
         for station_id in self.station_ids:
             history = self._fetch_station_observation_history(station_id, start, end)
             observations.extend(self._filter_window(history, start, end))
+
         observations = self._downsample_hourly(observations)
         self.__class__._history_cache = observations
         self.__class__._history_fetched_at = now
         return observations
-
-    def fetch_last_year_hourly(self) -> List[Observation]:
-        """Return hourly observations from the beginning of last year until now."""
-
-        now = datetime.now(timezone.utc)
-        start = datetime(now.year - 1, 1, 1, tzinfo=timezone.utc)
-        end = now
-
-        if self.use_sample_data:
-            sample_path = DATA_DIR / "sample_observations.json"
-            with sample_path.open("r", encoding="utf-8") as file:
-                sample = json.load(file)
-            filtered_sample = self._filter_window(sample, start, end)
-            return self._downsample_hourly(filtered_sample)
-
-        observations: List[Observation] = []
-        for station_id in self.station_ids:
-            history = self._fetch_station_observation_history(station_id, start, end)
-            observations.extend(self._filter_window(history, start, end))
-
-        return self._downsample_hourly(observations)
 
     def fetch_forecast(
         self,
@@ -372,60 +352,6 @@ class FMIClient:
                 )
             )
         return points
-
-    def fetch_forecasts_last_three_years(
-        self,
-        *,
-        places: Iterable[str] | None = None,
-        timestep_hours: int = 1,
-        forecast_points: int = 168,
-    ) -> List[ForecastPoint]:
-        """Fetch forecasts and keep only entries within the last three years."""
-
-        if self.use_sample_data:
-            LOGGER.info("Sample mode enabled; skipping historical forecast fetch")
-            return []
-
-        place_list = list(places) if places is not None else (self.forecast_places or [])
-        if not place_list:
-            LOGGER.info("No forecast places supplied; skipping forecast retrieval")
-            return []
-
-        collected: List[ForecastPoint] = []
-        for place in place_list:
-            collected.extend(
-                self.fetch_forecast(
-                    place,
-                    timestep_hours=timestep_hours,
-                    forecast_points=forecast_points,
-                )
-            )
-
-        if not collected:
-            return []
-
-        three_years_ago = datetime.now(timezone.utc) - timedelta(days=365 * 3)
-        now = datetime.now(timezone.utc)
-        filtered: List[ForecastPoint] = []
-        for entry in collected:
-            timestamp = entry.get("timestamp")
-            if not timestamp:
-                continue
-
-            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
-            try:
-                parsed = datetime.fromisoformat(cleaned_timestamp)
-            except ValueError:
-                LOGGER.debug("Unable to parse forecast timestamp %s", timestamp)
-                continue
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-
-            if three_years_ago <= parsed <= now:
-                filtered.append(entry)
-
-        return filtered
 
 
 def observations_as_dataframe(observations: Iterable[Observation]):
