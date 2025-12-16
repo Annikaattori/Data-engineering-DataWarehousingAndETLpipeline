@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Iterable, List
+from typing import Callable, Iterable, List
 
 from kafka import KafkaConsumer, KafkaProducer
+from kafka.errors import NoBrokersAvailable
 
 from .config import CONFIG
 from .fmi_client import FMIClient, Observation, observations_as_dataframe
@@ -15,13 +17,48 @@ from . import transformations
 LOGGER = logging.getLogger(__name__)
 
 
+def _connect_with_retries(
+    factory: Callable[[], object],
+    component: str,
+    attempts: int = 5,
+    delay_seconds: int = 2,
+):
+    """Create Kafka clients with simple retry logic while the broker starts up."""
+
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return factory()
+        except NoBrokersAvailable as exc:  # pragma: no cover - depends on live Kafka
+            last_error = exc
+            if attempt == attempts:
+                break
+            LOGGER.warning(
+                "Kafka %s unavailable (attempt %s/%s): %s. Retrying in %ss.",
+                component,
+                attempt,
+                attempts,
+                exc,
+                delay_seconds,
+            )
+            time.sleep(delay_seconds)
+
+    LOGGER.error(
+        "Kafka %s unavailable after %s attempts: %s.", component, attempts, last_error
+    )
+    raise last_error
+
+
 class ObservationProducer:
     def __init__(self, bootstrap_servers: str | None = None, topic: str | None = None):
         self.topic = topic or CONFIG.kafka_topic
         # KafkaProducer serialises Observation dicts as UTF-8 JSON strings for portability
-        self.producer = KafkaProducer(
-            bootstrap_servers=bootstrap_servers or CONFIG.kafka_bootstrap_servers,
-            value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+        self.producer = _connect_with_retries(
+            lambda: KafkaProducer(
+                bootstrap_servers=bootstrap_servers or CONFIG.kafka_bootstrap_servers,
+                value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+            ),
+            component="producer",
         )
 
     def publish_batch(self, observations: Iterable[Observation]) -> int:
@@ -213,14 +250,17 @@ class ObservationConsumer:
         group_id: str = "fmi-ingestion",
     ):
         self.topic = topic or CONFIG.kafka_topic
-        self.consumer = KafkaConsumer(
-            self.topic,
-            bootstrap_servers=bootstrap_servers or CONFIG.kafka_bootstrap_servers,
-            value_deserializer=lambda message: json.loads(message.decode("utf-8")),
-            enable_auto_commit=True,
-            group_id=group_id,
-            auto_offset_reset="earliest",
-            consumer_timeout_ms=5000,  # lopettaa jos 5s ei tule uusia viestejä
+        self.consumer = _connect_with_retries(
+            lambda: KafkaConsumer(
+                self.topic,
+                bootstrap_servers=bootstrap_servers or CONFIG.kafka_bootstrap_servers,
+                value_deserializer=lambda message: json.loads(message.decode("utf-8")),
+                enable_auto_commit=True,
+                group_id=group_id,
+                auto_offset_reset="earliest",
+                consumer_timeout_ms=5000,  # lopettaa jos 5s ei tule uusia viestejä
+            ),
+            component="consumer",
         )
 
         self.sink = BigQuerySink()
