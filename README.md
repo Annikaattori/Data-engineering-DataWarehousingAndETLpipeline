@@ -1,6 +1,6 @@
 # FMI Weather Data Pipeline
 
-This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. The pipeline ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
+This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. Historical backfills and live hourly ingestion append to the same table so the dataset stays continuous. The pipeline ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
 
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
