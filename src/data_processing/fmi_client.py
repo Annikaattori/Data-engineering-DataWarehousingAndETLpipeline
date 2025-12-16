@@ -63,24 +63,37 @@ class FMIClient:
 
     def _extract_time(self, payload) -> str:
         candidate = getattr(payload, "time", None)
+
+        if candidate is None and isinstance(payload, dict):
+            candidate = payload.get("time") or payload.get("timestamp")
+
         if candidate is None and hasattr(payload, "data"):
             candidate = getattr(payload.data, "time", None)
+
         if candidate is None:
             return utc_now_iso()
+
         if hasattr(candidate, "isoformat"):
             return candidate.isoformat()
+
         return str(candidate)
 
     def _extract_value(self, payload, keys: Iterable[str]) -> Optional[float]:
         for key in keys:
             value = getattr(payload, key, None)
+
+            if value is None and isinstance(payload, dict):
+                value = payload.get(key)
+
             if value is None and hasattr(payload, "data"):
                 value = getattr(payload.data, key, None)
+
             if value is not None:
                 try:
                     return float(value)
                 except (TypeError, ValueError):
                     LOGGER.debug("Unable to coerce %s to float from payload %s", key, payload)
+
         return None
 
     def _build_observation(self, station_id: str, payload) -> Observation | None:
