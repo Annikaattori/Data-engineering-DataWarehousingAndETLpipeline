@@ -38,6 +38,11 @@ class ObservationProducer:
         observations = client.fetch_latest()
         return self.publish_batch(observations)
 
+    def publish_last_three_years(self) -> int:
+        client = FMIClient()
+        observations = client.fetch_last_three_years()
+        return self.publish_batch(observations)
+
 
 class BigQuerySink:
     def __init__(

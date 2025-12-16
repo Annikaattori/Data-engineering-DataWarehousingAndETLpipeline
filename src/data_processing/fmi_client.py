@@ -43,6 +43,10 @@ class ForecastPoint(TypedDict, total=False):
 class FMIClient:
     """Simple FMI client capable of returning the most recent observations."""
 
+    _history_cache: List[Observation] = []
+    _history_fetched_at: datetime | None = None
+    _history_ttl = timedelta(minutes=30)
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -79,6 +83,23 @@ class FMIClient:
                     LOGGER.debug("Unable to coerce %s to float from payload %s", key, payload)
         return None
 
+    def _build_observation(self, station_id: str, payload) -> Observation | None:
+        if payload is None:
+            return None
+
+        station_name = getattr(payload, "place", str(station_id))
+        return Observation(
+            station_id=str(station_id),
+            station_name=station_name,
+            latitude=self._extract_value(payload, ["latitude", "lat"]),
+            longitude=self._extract_value(payload, ["longitude", "lon", "lng"]),
+            elevation=self._extract_value(payload, ["elevation", "altitude", "height"]),
+            timestamp=self._extract_time(payload),
+            temperature=self._extract_value(payload, ["temperature"]),
+            humidity=self._extract_value(payload, ["humidity", "relative_humidity"]),
+            wind_speed=self._extract_value(payload, ["wind_speed", "windspeed"]),
+        )
+
     def _fetch_station_observation(self, station_id: str) -> Observation | None:
         try:
             weather = fmi.observation_by_station_id(int(station_id))
@@ -97,18 +118,76 @@ class FMIClient:
             LOGGER.warning("No observation returned for station %s", station_id)
             return None
 
-        station_name = getattr(weather, "place", str(station_id))
-        return Observation(
-            station_id=str(station_id),
-            station_name=station_name,
-            latitude=self._extract_value(weather, ["latitude", "lat"]),
-            longitude=self._extract_value(weather, ["longitude", "lon", "lng"]),
-            elevation=self._extract_value(weather, ["elevation", "altitude", "height"]),
-            timestamp=self._extract_time(weather),
-            temperature=self._extract_value(weather, ["temperature"]),
-            humidity=self._extract_value(weather, ["humidity", "relative_humidity"]),
-            wind_speed=self._extract_value(weather, ["wind_speed", "windspeed"]),
-        )
+        return self._build_observation(station_id, weather)
+
+    def _fetch_station_observation_history(
+        self, station_id: str, start_time: datetime, end_time: datetime
+    ) -> List[Observation]:
+        if not hasattr(fmi, "observations_by_station_id"):
+            LOGGER.warning(
+                "Historical fetch unavailable; falling back to latest observation for station %s", station_id
+            )
+            latest = self._fetch_station_observation(station_id)
+            return [latest] if latest else []
+
+        try:
+            history = fmi.observations_by_station_id(
+                int(station_id), start_time=start_time, end_time=end_time
+            )
+        except ClientError as err:
+            LOGGER.warning(
+                "Client error while fetching history for %s (status %s): %s",
+                station_id,
+                err.status_code,
+                err.message,
+            )
+            return []
+        except ServerError as err:  # pragma: no cover - network interactions
+            LOGGER.error(
+                "Server error while fetching history for %s (status %s): %s",
+                station_id,
+                err.status_code,
+                err.body,
+            )
+            return []
+
+        if not history:
+            LOGGER.warning("No historical observations returned for station %s", station_id)
+            return []
+
+        entries = getattr(history, "observations", history)
+        observations: List[Observation] = []
+        for payload in entries:
+            observation = self._build_observation(station_id, payload)
+            if observation:
+                observations.append(observation)
+        return observations
+
+    def _filter_three_year_window(self, observations: List[Observation]) -> List[Observation]:
+        if not observations:
+            return []
+
+        three_years_ago = datetime.now(timezone.utc) - timedelta(days=365 * 3)
+        now = datetime.now(timezone.utc)
+        filtered: List[Observation] = []
+        for obs in observations:
+            timestamp = obs.get("timestamp")
+            if not timestamp:
+                continue
+
+            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(cleaned_timestamp)
+            except ValueError:
+                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
+                continue
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+
+            if three_years_ago <= parsed <= now:
+                filtered.append(obs)
+        return filtered
 
     def fetch_latest(self) -> List[Observation]:
         """Return the latest observations using ``fmi-weather-client``.
@@ -127,6 +206,37 @@ class FMIClient:
             observation = self._fetch_station_observation(station_id)
             if observation:
                 observations.append(observation)
+        return observations
+
+    def fetch_last_three_years(self) -> List[Observation]:
+        """Return historical observations for whitelisted stations."""
+
+        now = datetime.now(timezone.utc)
+        if self.__class__._history_fetched_at and now - self.__class__._history_fetched_at < self._history_ttl:
+            LOGGER.info(
+                "Returning cached historical observations fetched at %s",
+                self.__class__._history_fetched_at,
+            )
+            return list(self.__class__._history_cache)
+
+        start = datetime.now(timezone.utc) - timedelta(days=365 * 3)
+        end = now
+
+        if self.use_sample_data:
+            sample_path = DATA_DIR / "sample_observations.json"
+            with sample_path.open("r", encoding="utf-8") as file:
+                sample = json.load(file)
+            filtered_sample = self._filter_three_year_window(sample)
+            self.__class__._history_cache = filtered_sample
+            self.__class__._history_fetched_at = now
+            return filtered_sample
+
+        observations: List[Observation] = []
+        for station_id in self.station_ids:
+            history = self._fetch_station_observation_history(station_id, start, end)
+            observations.extend(self._filter_three_year_window(history))
+        self.__class__._history_cache = observations
+        self.__class__._history_fetched_at = now
         return observations
 
     def fetch_forecast(
