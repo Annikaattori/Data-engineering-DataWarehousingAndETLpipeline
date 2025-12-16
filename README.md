@@ -26,7 +26,7 @@ Uniqueness conceptually follows (`station_id`, `timestamp`). Deduplication is ap
 
 ### Pipeline steps
 1. **Sampling**: `FMIClient` down-samples to hourly resolution by flooring timestamps and keeping the latest observation within each hour. Sample fixtures follow the same rule for parity with live data.
-2. **Kafka**: `ObservationProducer` publishes the latest hourly readings or a backfill covering the last year. Messages are JSON-encoded.
+2. **Kafka**: `ObservationProducer` publishes the latest hourly readings or a backfill covering the last 365 days. Messages are JSON-encoded.
 3. **BigQuery load**: `ObservationConsumer` batches Kafka messages, converts them with `transformations.prepare_hourly_for_bigquery`, deduplicates on `(station_id, timestamp)`, and appends directly to the hourly table (`CONFIG.hourly_table`).
 4. **Orchestration**: Airflow triggers the producer and consumer hourly. A separate manual backfill DAG can replay the last year.
 5. **Visualisation**: `visualization/app.py` can read BigQuery or the bundled sample data.
@@ -84,7 +84,7 @@ Consume a batch and upload to BigQuery:
 USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream consume --max-messages 200
 ```
 
-Backfill the last year of hourly data:
+Backfill the last 365 days of hourly data:
 ```bash
 USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce --mode backfill-last-year-hourly
 ```
@@ -109,7 +109,7 @@ Run hourly modes manually through Docker:
   docker compose run --rm producer python -m src.data_processing.kafka_stream produce --mode latest-hourly
   docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 500
   ```
-- Backfill from the start of last year:
+- Backfill for the last 365 days:
   ```bash
   docker compose run --rm producer python -m src.data_processing.kafka_stream produce --mode backfill-last-year-hourly
   docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 2000
@@ -137,11 +137,11 @@ HAVING n > 1
 ORDER BY n DESC;
 ```
 
-**Row count from the start of last year**
+**Row count from the last 365 days**
 ```sql
 SELECT COUNT(*) AS rows
 FROM `<project>.<dataset>.<hourly_table>`
-WHERE timestamp >= TIMESTAMP('2024-01-01');
+WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 365 DAY);
 ```
 
 ## Streamlit demo

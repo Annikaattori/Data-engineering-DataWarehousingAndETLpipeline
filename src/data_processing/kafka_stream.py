@@ -80,11 +80,6 @@ class ObservationProducer:
         observations = client.fetch_latest_hourly()
         return self.publish_batch(observations)
 
-    def publish_last_three_years(self) -> int:
-        client = FMIClient()
-        observations = client.fetch_last_three_years()
-        return self.publish_batch(observations)
-
     def publish_backfill_last_year_hourly(self) -> int:
         client = FMIClient()
         observations = client.fetch_last_year_hourly()
@@ -321,10 +316,9 @@ def _cli():  # pragma: no cover - convenience entrypoint
             "latest-hourly",
             "backfill-last-year-hourly",
             "latest",
-            "history",
         ],
         default="latest-hourly",
-        help="Producer mode: hourly sampling for latest/backfill or legacy modes",
+        help="Producer mode: hourly sampling for latest/backfill or raw latest observations",
     )
     parser.add_argument("--max-messages", type=int, default=200, help="Number of messages to read when consuming")
     parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
@@ -336,8 +330,6 @@ def _cli():  # pragma: no cover - convenience entrypoint
             producer.publish_latest_hourly()
         elif args.mode == "backfill-last-year-hourly":
             producer.publish_backfill_last_year_hourly()
-        elif args.mode == "history":
-            producer.publish_last_three_years()
         else:
             producer.publish_latest()
     else:
