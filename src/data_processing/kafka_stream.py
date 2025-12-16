@@ -80,11 +80,6 @@ class ObservationProducer:
         observations = client.fetch_latest_hourly()
         return self.publish_batch(observations)
 
-    def publish_backfill_last_year_hourly(self) -> int:
-        client = FMIClient()
-        observations = client.fetch_last_year_hourly()
-        return self.publish_batch(observations)
-
 
 class BigQuerySink:
     def __init__(
@@ -161,51 +156,6 @@ class BigQuerySink:
         except Exception as exc:  # pylint: disable=broad-except
             LOGGER.warning("Unable to verify existence of %s: %s", table_id, exc)
             return False
-
-    def _has_recent_history(self, table_id: str, lookback_days: int = 365) -> bool:
-        if not self._table_exists(table_id):
-            return False
-
-        query = (
-            "SELECT COUNT(1) as row_count "
-            f"FROM `{self.project_id}.{table_id}` "
-            "WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)"
-        )
-
-        try:  # pragma: no cover - requires live BigQuery
-            from google.cloud import bigquery
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("days", "INT64", lookback_days)
-                ]
-            )
-            rows = list(self.bq_client.query(query, job_config=job_config).result())
-        except Exception as exc:  # pylint: disable=broad-except
-            LOGGER.warning(
-                "Unable to query history window for %s: %s. Falling back to backfill.",
-                table_id,
-                exc,
-            )
-            return False
-
-        if not rows:
-            return False
-
-        row_count = rows[0].get("row_count", 0)
-        if row_count == 0:
-            LOGGER.info(
-                "No rows found in the last %s days for %s; backfill required", lookback_days, table_id
-            )
-            return False
-
-        LOGGER.info(
-            "Detected %s rows in the last %s days for %s; skipping backfill",
-            row_count,
-            lookback_days,
-            table_id,
-        )
-        return True
 
     def _verify_row_persistence(self, destination_table: str, expected_rows: int) -> None:
         """Confirm rows landed in BigQuery and emit actionable error logs if not.
@@ -301,23 +251,6 @@ class BigQuerySink:
         self._upload_and_verify(frame, destination_table=destination_table)
         return len(frame)
 
-    def ensure_hourly_history(self, lookback_days: int = 365) -> bool:
-        destination_table = f"{self.dataset}.{self.observations_table}"
-        if self._has_recent_history(destination_table, lookback_days=lookback_days):
-            return True
-
-        client = FMIClient()
-        LOGGER.info(
-            "Fetching %s days of hourly history to populate %s", lookback_days, destination_table
-        )
-        history = client.fetch_last_year_hourly()
-        if not history:
-            LOGGER.warning("Historical fetch returned no rows; skipping backfill")
-            return False
-
-        self.write_hourly_batch(history)
-        return True
-
 
 class ObservationConsumer:
     def __init__(
@@ -335,7 +268,6 @@ class ObservationConsumer:
                 enable_auto_commit=True,
                 group_id=group_id,
                 auto_offset_reset="earliest",
-                consumer_timeout_ms=5000,  # lopettaa jos 5s ei tule uusia viestejä
             ),
             component="consumer",
         )
@@ -351,32 +283,29 @@ class ObservationConsumer:
         buffer.clear()
         return ingested
 
-    def consume_once(self, max_messages: int | None = None) -> int:
-        # Collect Kafka messages in-memory so we can upload in a single BigQuery batch
+    def consume_forever(
+        self, batch_size: int = 500, flush_interval_seconds: int = 10
+    ) -> None:  # pragma: no cover - long-running loop
+        LOGGER.info(
+            "Starting continuous consumer with batch size %s and flush interval %ss",
+            batch_size,
+            flush_interval_seconds,
+        )
         buffer: List[Observation] = []
-        for index, message in enumerate(self.consumer):
-            buffer.append(message.value)
-            if max_messages is not None and index + 1 >= max_messages:
-                break
-
-        if not buffer:
-            LOGGER.warning("No messages read from Kafka topic %s", self.topic)
-            return 0
-
-        return self._flush_buffer(buffer)
-
-    def consume_forever(self, batch_size: int = 500) -> None:  # pragma: no cover - long-running loop
-        LOGGER.info("Starting continuous consumer with batch size %s", batch_size)
-        buffer: List[Observation] = []
+        last_flush = time.monotonic()
 
         while True:
-            for message in self.consumer:
-                buffer.append(message.value)
-                if len(buffer) >= batch_size:
-                    self._flush_buffer(buffer)
+            message_pack = self.consumer.poll(timeout_ms=1000)
+            for messages in message_pack.values():
+                for message in messages:
+                    buffer.append(message.value)
+                    if len(buffer) >= batch_size:
+                        self._flush_buffer(buffer)
+                        last_flush = time.monotonic()
 
-            # consumer iteration ends after consumer_timeout_ms with no new messages
-            self._flush_buffer(buffer)
+            if buffer and time.monotonic() - last_flush >= flush_interval_seconds:
+                self._flush_buffer(buffer)
+                last_flush = time.monotonic()
 
 
 class HourlyIngestionService:
@@ -414,17 +343,13 @@ def _cli():  # pragma: no cover - convenience entrypoint
     parser.add_argument(
         "action",
         choices=["produce", "consume", "bootstrap-hourly"],
-        help="Whether to fetch and publish, consume a batch, or run the hourly bootstrap",
+        help="Whether to fetch and publish, consume continuously, or run the hourly bootstrap",
     )
     parser.add_argument(
         "--mode",
-        choices=[
-            "latest-hourly",
-            "backfill-last-year-hourly",
-            "latest",
-        ],
+        choices=["latest-hourly", "latest"],
         default="latest-hourly",
-        help="Producer mode: hourly sampling for latest/backfill or raw latest observations",
+        help="Producer mode: hourly sampling or raw latest observations",
     )
     parser.add_argument(
         "--batch-size",
@@ -445,8 +370,6 @@ def _cli():  # pragma: no cover - convenience entrypoint
         producer = ObservationProducer()
         if args.mode == "latest-hourly":
             producer.publish_latest_hourly()
-        elif args.mode == "backfill-last-year-hourly":
-            producer.publish_backfill_last_year_hourly()
         else:
             producer.publish_latest()
     elif args.action == "consume":
@@ -454,11 +377,7 @@ def _cli():  # pragma: no cover - convenience entrypoint
             batch_size=args.batch_size
         )
     else:
-        sink = BigQuerySink()
-        if not sink.ensure_hourly_history():
-            LOGGER.warning("Hourly history backfill did not complete successfully")
-
-        HourlyIngestionService(sink=sink, interval_seconds=args.interval_seconds).run_forever()
+        HourlyIngestionService(interval_seconds=args.interval_seconds).run_forever()
 
 
 if __name__ == "__main__":
