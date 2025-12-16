@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, TypedDict
 
@@ -42,10 +42,6 @@ class ForecastPoint(TypedDict, total=False):
 
 class FMIClient:
     """Simple FMI client capable of returning the most recent observations."""
-
-    _history_cache: List[Observation] = []
-    _history_fetched_at: datetime | None = None
-    _history_ttl = timedelta(minutes=30)
 
     def __init__(
         self,
@@ -143,75 +139,6 @@ class FMIClient:
 
         return self._build_observation(station_id, weather)
 
-    def _fetch_station_observation_history(
-        self, station_id: str, start_time: datetime, end_time: datetime
-    ) -> List[Observation]:
-        if not hasattr(fmi, "observations_by_station_id"):
-            LOGGER.warning(
-                "Historical fetch unavailable; falling back to latest observation for station %s", station_id
-            )
-            latest = self._fetch_station_observation(station_id)
-            return [latest] if latest else []
-
-        try:
-            history = fmi.observations_by_station_id(
-                int(station_id), start_time=start_time, end_time=end_time
-            )
-        except ClientError as err:
-            LOGGER.warning(
-                "Client error while fetching history for %s (status %s): %s",
-                station_id,
-                err.status_code,
-                err.message,
-            )
-            return []
-        except ServerError as err:  # pragma: no cover - network interactions
-            LOGGER.error(
-                "Server error while fetching history for %s (status %s): %s",
-                station_id,
-                err.status_code,
-                err.body,
-            )
-            return []
-
-        if not history:
-            LOGGER.warning("No historical observations returned for station %s", station_id)
-            return []
-
-        entries = getattr(history, "observations", history)
-        observations: List[Observation] = []
-        for payload in entries:
-            observation = self._build_observation(station_id, payload)
-            if observation:
-                observations.append(observation)
-        return observations
-
-    def _filter_window(
-        self, observations: List[Observation], start: datetime, end: datetime
-    ) -> List[Observation]:
-        if not observations:
-            return []
-
-        filtered: List[Observation] = []
-        for obs in observations:
-            timestamp = obs.get("timestamp")
-            if not timestamp:
-                continue
-
-            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
-            try:
-                parsed = datetime.fromisoformat(cleaned_timestamp)
-            except ValueError:
-                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
-                continue
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-
-            if start <= parsed <= end:
-                filtered.append(obs)
-        return filtered
-
     def _downsample_hourly(self, observations: List[Observation]) -> List[Observation]:
         """Return one observation per station per hour using deterministic flooring.
 
@@ -285,40 +212,6 @@ class FMIClient:
 
         latest = self.fetch_latest()
         return self._downsample_hourly(latest)
-
-    def fetch_last_year_hourly(self) -> List[Observation]:
-        """Return hourly observations covering the last 365 days."""
-
-        now = datetime.now(timezone.utc)
-        if self.__class__._history_fetched_at and now - self.__class__._history_fetched_at < self._history_ttl:
-            LOGGER.info(
-                "Returning cached historical observations fetched at %s",
-                self.__class__._history_fetched_at,
-            )
-            return list(self.__class__._history_cache)
-
-        start = now - timedelta(days=365)
-        end = now
-
-        if self.use_sample_data:
-            sample_path = DATA_DIR / "sample_observations.json"
-            with sample_path.open("r", encoding="utf-8") as file:
-                sample = json.load(file)
-            filtered_sample = self._filter_window(sample, start, end)
-            hourly_sample = self._downsample_hourly(filtered_sample)
-            self.__class__._history_cache = hourly_sample
-            self.__class__._history_fetched_at = now
-            return hourly_sample
-
-        observations: List[Observation] = []
-        for station_id in self.station_ids:
-            history = self._fetch_station_observation_history(station_id, start, end)
-            observations.extend(self._filter_window(history, start, end))
-
-        observations = self._downsample_hourly(observations)
-        self.__class__._history_cache = observations
-        self.__class__._history_fetched_at = now
-        return observations
 
     def fetch_forecast(
         self,

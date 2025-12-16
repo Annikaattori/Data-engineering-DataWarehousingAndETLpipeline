@@ -1,10 +1,10 @@
 # FMI Weather Data Pipeline
 
-This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. Historical backfills and live hourly ingestion append to the same table so the dataset stays continuous. The pipeline ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
+This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. The pipeline now focuses solely on fresh data going forward, pulling live observations only from an explicit whitelist of stations. It ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
 
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
-- `dags/`: Airflow DAGs for hourly ingestion and manual backfill.
+- `dags/`: Airflow DAGs for hourly ingestion.
 - `visualization/`: Streamlit demo UI.
 - `data/sample_observations.json`: Sample observations for offline testing.
 
@@ -26,9 +26,9 @@ Uniqueness conceptually follows (`station_id`, `timestamp`). Deduplication is ap
 
 ### Pipeline steps
 1. **Sampling**: `FMIClient` down-samples to hourly resolution by flooring timestamps and keeping the latest observation within each hour. Sample fixtures follow the same rule for parity with live data.
-2. **Kafka**: `ObservationProducer` publishes the latest hourly readings or a backfill covering the last 365 days. Messages are JSON-encoded.
-3. **BigQuery load**: `ObservationConsumer` batches Kafka messages, converts them with `transformations.prepare_hourly_for_bigquery`, deduplicates on `(station_id, timestamp)`, and appends directly to the hourly table (`CONFIG.hourly_table`).
-4. **Orchestration**: Airflow triggers the producer and consumer hourly. A separate manual backfill DAG can replay the last year.
+2. **Kafka**: `ObservationProducer` publishes the latest hourly readings from the station whitelist. Messages are JSON-encoded.
+3. **BigQuery load**: `ObservationConsumer` batches Kafka messages, converts them with `transformations.prepare_hourly_for_bigquery`, deduplicates on `(station_id, timestamp)`, and appends directly to the hourly table (`CONFIG.hourly_table`). The consumer remains running until stopped manually.
+4. **Orchestration**: Airflow triggers the producer and starts the continuous consumer hourly, or you can run the consumer long-lived outside Airflow.
 5. **Visualisation**: `visualization/app.py` can read BigQuery or the bundled sample data.
 
 ## Environment configuration
@@ -43,7 +43,7 @@ Key environment variables:
 - `BIGQUERY_HOURLY_TABLE`: Hourly table name (default `weather_hourly_samples`).
 - `BIGQUERY_DAILY_TABLE`: Legacy daily table name (kept for compatibility but unused by the hourly sink).
 - `BIGQUERY_API_KEY_PATH`: Path to the BigQuery API key or service account JSON file (default `keys/bigquery/api_key.json`).
-- `STATION_WHITELIST`: Comma-separated list of station IDs for historical filtering (defaults to five Finnish stations).
+- `STATION_WHITELIST`: Comma-separated list of station IDs that are allowed for ingestion (defaults to five Finnish stations).
 
 Place your BigQuery API key or service account JSON file at `keys/bigquery/api_key.json` or point `BIGQUERY_API_KEY_PATH` to its location.
 
@@ -79,19 +79,13 @@ Run the producer once to send **hourly** observations into Kafka:
 USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce --mode latest-hourly
 ```
 
-Consume a batch and upload to BigQuery:
+Start the consumer and keep it running to stream uploads into BigQuery:
 ```bash
-USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream consume --max-messages 200
+USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream consume --batch-size 500
 ```
-
-Backfill the last 365 days of hourly data:
-```bash
-USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce --mode backfill-last-year-hourly
-```
-Run the consumer repeatedly (or with a high `--max-messages`) to drain the topic after a backfill.
 
 ### Airflow
-Copy `dags/fmi_weather_dag.py` into your Airflow `dags/` folder. The primary DAG `fmi_weather_pipeline` schedules producer then consumer **hourly** (`@hourly`). A separate manual DAG `fmi_weather_backfill_hourly` runs the backfill producer followed by a high-volume consumer.
+Copy `dags/fmi_weather_dag.py` into your Airflow `dags/` folder. The primary DAG `fmi_weather_pipeline` schedules the producer and starts the continuous consumer **hourly** (`@hourly`). The consumer task is long-running and should be stopped manually when maintenance is required.
 
 ### Running with Docker
 
@@ -107,16 +101,10 @@ Run hourly modes manually through Docker:
 - Latest hourly batch:
   ```bash
   docker compose run --rm producer python -m src.data_processing.kafka_stream produce --mode latest-hourly
-  docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 500
-  ```
-- Backfill for the last 365 days:
-  ```bash
-  docker compose run --rm producer python -m src.data_processing.kafka_stream produce --mode backfill-last-year-hourly
-  docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 2000
+  docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --batch-size 500
   ```
 
 Hourly ingestion service (BigQuery only):
-- The `hourly-ingestor` service will automatically backfill the last year to BigQuery if the hourly table is empty or missing recent data, then continue uploading fresh hourly data.
 - Start it with Docker:
   ```bash
   docker compose up -d hourly-ingestor
