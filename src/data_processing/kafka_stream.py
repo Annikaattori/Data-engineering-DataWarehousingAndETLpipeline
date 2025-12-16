@@ -95,10 +95,7 @@ class BigQuerySink:
     ):
         self.dataset = dataset or CONFIG.bigquery_dataset
         self.project_id = project_id or CONFIG.bigquery_project
-        self.daily_table = CONFIG.daily_table
-        self.hourly_table = CONFIG.hourly_table
-        self.long_term_table = CONFIG.long_term_table
-        self.station_whitelist = set(CONFIG.station_whitelist)
+        self.observations_table = CONFIG.hourly_table
         self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
 
         # BigQuery client is lazy-loaded to avoid dependency issues during unit tests
@@ -276,7 +273,7 @@ class BigQuerySink:
 
         frame = transformations.prepare_for_bigquery(frame)
 
-        destination_table = f"{self.dataset}.{self.daily_table}"
+        destination_table = f"{self.dataset}.{self.observations_table}"
         LOGGER.info(
             "Loading %s rows to %s in project %s",
             len(frame),
@@ -284,7 +281,6 @@ class BigQuerySink:
             self.project_id,
         )
         self._upload_and_verify(frame, destination_table=destination_table)
-        self._update_long_term_table(frame)
         return len(frame)
 
     def write_hourly_batch(self, observations: List[Observation]):
@@ -295,7 +291,7 @@ class BigQuerySink:
 
         frame = transformations.prepare_hourly_for_bigquery(frame)
 
-        destination_table = f"{self.dataset}.{self.hourly_table}"
+        destination_table = f"{self.dataset}.{self.observations_table}"
         LOGGER.info(
             "Loading %s hourly rows to %s in project %s",
             len(frame),
@@ -306,7 +302,7 @@ class BigQuerySink:
         return len(frame)
 
     def ensure_hourly_history(self, lookback_days: int = 365) -> bool:
-        destination_table = f"{self.dataset}.{self.hourly_table}"
+        destination_table = f"{self.dataset}.{self.observations_table}"
         if self._has_recent_history(destination_table, lookback_days=lookback_days):
             return True
 
@@ -321,24 +317,6 @@ class BigQuerySink:
 
         self.write_hourly_batch(history)
         return True
-
-    def _update_long_term_table(self, frame):
-        if frame.empty:
-            return
-
-        filtered = frame[frame["station_id"].isin(self.station_whitelist)]
-        if filtered.empty:
-            LOGGER.info("No whitelisted stations present; skipping long-term update")
-            return
-
-        destination_table = f"{self.dataset}.{self.long_term_table}"
-        LOGGER.info(
-            "Updating long-term table %s with %s rows across %s stations",
-            destination_table,
-            len(filtered),
-            filtered["station_id"].nunique(),
-        )
-        self._upload_and_verify(filtered, destination_table=destination_table)
 
 
 class ObservationConsumer:
