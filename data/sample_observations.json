@@ -5,7 +5,10 @@
     "timestamp": "2024-06-01T10:00:00Z",
     "temperature": 12.4,
     "humidity": 63.0,
-    "wind_speed": 4.1
+    "wind_speed": 4.1,
+    "latitude": 60.1719,
+    "longitude": 24.9417,
+    "elevation": 19.0
   },
   {
     "station_id": "101104",
@@ -13,7 +16,10 @@
     "timestamp": "2024-06-01T10:10:00Z",
     "temperature": 12.6,
     "humidity": 62.5,
-    "wind_speed": 4.4
+    "wind_speed": 4.4,
+    "latitude": 60.1719,
+    "longitude": 24.9417,
+    "elevation": 19.0
   },
   {
     "station_id": "100968",
@@ -21,7 +27,10 @@
     "timestamp": "2024-06-01T10:00:00Z",
     "temperature": 11.2,
     "humidity": 68.0,
-    "wind_speed": 3.2
+    "wind_speed": 3.2,
+    "latitude": 60.514,
+    "longitude": 22.262,
+    "elevation": 6.0
   },
   {
     "station_id": "100946",
@@ -29,7 +38,10 @@
     "timestamp": "2024-06-01T10:00:00Z",
     "temperature": 10.8,
     "humidity": 70.4,
-    "wind_speed": 2.9
+    "wind_speed": 2.9,
+    "latitude": 61.461,
+    "longitude": 23.587,
+    "elevation": 119.0
   },
   {
     "station_id": "102172",
@@ -37,7 +49,10 @@
     "timestamp": "2024-06-01T10:00:00Z",
     "temperature": 9.6,
     "humidity": 74.2,
-    "wind_speed": 5.1
+    "wind_speed": 5.1,
+    "latitude": 64.929,
+    "longitude": 25.354,
+    "elevation": 15.0
   },
   {
     "station_id": "101932",
@@ -45,6 +60,9 @@
     "timestamp": "2024-06-01T10:00:00Z",
     "temperature": 8.1,
     "humidity": 77.5,
-    "wind_speed": 3.8
+    "wind_speed": 3.8,
+    "latitude": 62.892,
+    "longitude": 27.677,
+    "elevation": 98.0
   }
 ]
