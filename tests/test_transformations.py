@@ -84,3 +84,23 @@ def test_prepare_for_bigquery_handles_missing_and_duplicates():
     assert cleaned.drop_duplicates(subset=["station_id", "timestamp"]).shape[0] == len(
         cleaned
     )
+
+
+def test_prepare_hourly_for_bigquery_floors_and_dedupes():
+    frame = pd.DataFrame(
+        [
+            {"station_id": "S1", "timestamp": "2024-01-01T00:15:00Z", "temperature": 1, "humidity": 10},
+            {"station_id": "S1", "timestamp": "2024-01-01T00:45:00Z", "temperature": 2, "humidity": 11},
+            {"station_id": "S1", "timestamp": "2024-01-01T01:05:00Z", "temperature": 3, "humidity": 12},
+            {"station_id": "S2", "timestamp": "2024-01-01T00:10:00Z", "temperature": 4, "humidity": 13},
+        ]
+    )
+
+    prepared = transformations.prepare_hourly_for_bigquery(frame)
+
+    assert len(prepared) == 3  # one per station/hour
+    assert prepared.loc[prepared["station_id"] == "S1", "timestamp"].min() == pd.Timestamp(
+        "2024-01-01T00:00:00+00:00"
+    )
+    s1_zero = prepared[prepared["station_id"] == "S1"].sort_values("timestamp").iloc[0]
+    assert s1_zero["temperature"] == 2  # latest within the hour wins

@@ -1,9 +1,8 @@
 """Configuration utilities for the FMI weather pipeline."""
 from __future__ import annotations
-from dataclasses import dataclass, field
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
@@ -41,6 +40,7 @@ class PipelineConfig:
         DEFAULT_BIGQUERY_KEY_PATH
     )
     daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
+    hourly_table: str = os.getenv("BIGQUERY_HOURLY_TABLE", "weather_hourly_samples")
     long_term_table: str = os.getenv("BIGQUERY_LONG_TERM_TABLE", "weather_history")
     station_whitelist: list[str] = field(
         default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))

@@ -189,6 +189,55 @@ class FMIClient:
                 filtered.append(obs)
         return filtered
 
+    def _downsample_hourly(self, observations: List[Observation]) -> List[Observation]:
+        """Return one observation per station per hour using deterministic flooring.
+
+        Timestamps are floored to the start of the hour (UTC). If multiple
+        observations exist within the same hour for a station, the latest
+        timestamp in that hour is retained to maximise freshness.
+        """
+
+        if not observations:
+            return []
+
+        latest_by_key: dict[tuple[str, datetime], tuple[Observation, datetime]] = {}
+
+        for obs in observations:
+            timestamp = obs.get("timestamp")
+            if not timestamp:
+                continue
+
+            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(cleaned_timestamp)
+            except ValueError:
+                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
+                continue
+
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+
+            hour_bucket = parsed.replace(minute=0, second=0, microsecond=0)
+            key = (str(obs.get("station_id")), hour_bucket)
+
+            existing = latest_by_key.get(key)
+            if existing is not None:
+                _, existing_ts = existing
+                if parsed <= existing_ts:
+                    continue
+
+            latest_by_key[key] = (obs, parsed)
+
+        hourly: List[Observation] = []
+        for (station_id, hour_bucket), (obs, _) in latest_by_key.items():
+            observation_copy = dict(obs)
+            observation_copy["station_id"] = str(station_id)
+            observation_copy["timestamp"] = hour_bucket.isoformat()
+            hourly.append(observation_copy)  # type: ignore[arg-type]
+
+        hourly.sort(key=lambda item: (item.get("station_id"), item.get("timestamp")))
+        return hourly
+
     def fetch_latest(self) -> List[Observation]:
         """Return the latest observations using ``fmi-weather-client``.
 
@@ -208,34 +257,11 @@ class FMIClient:
                 observations.append(observation)
         return observations
 
-    def _filter_hourly(self, observations: List[Observation]) -> List[Observation]:
-        if not observations:
-            return []
+    def fetch_latest_hourly(self) -> List[Observation]:
+        """Return the latest observations downsampled to hourly resolution."""
 
-        hourly: List[Observation] = []
-        seen: set[tuple[str, datetime]] = set()
-        for obs in observations:
-            timestamp = obs.get("timestamp")
-            if not timestamp:
-                continue
-
-            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
-            try:
-                parsed = datetime.fromisoformat(cleaned_timestamp)
-            except ValueError:
-                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
-                continue
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-
-            if parsed.minute == 0 and parsed.second == 0:
-                key = (str(obs.get("station_id")), parsed)
-                if key not in seen:
-                    hourly.append(obs)
-                    seen.add(key)
-
-        return hourly
+        latest = self.fetch_latest()
+        return self._downsample_hourly(latest)
 
     def fetch_last_three_years(self) -> List[Observation]:
         """Return historical observations starting from 2022 with sample data reduced to hourly."""
@@ -256,7 +282,7 @@ class FMIClient:
             with sample_path.open("r", encoding="utf-8") as file:
                 sample = json.load(file)
             filtered_sample = self._filter_window(sample, start, end)
-            hourly_sample = self._filter_hourly(filtered_sample)
+            hourly_sample = self._downsample_hourly(filtered_sample)
             self.__class__._history_cache = hourly_sample
             self.__class__._history_fetched_at = now
             return hourly_sample
@@ -265,9 +291,31 @@ class FMIClient:
         for station_id in self.station_ids:
             history = self._fetch_station_observation_history(station_id, start, end)
             observations.extend(self._filter_window(history, start, end))
+        observations = self._downsample_hourly(observations)
         self.__class__._history_cache = observations
         self.__class__._history_fetched_at = now
         return observations
+
+    def fetch_last_year_hourly(self) -> List[Observation]:
+        """Return hourly observations from the beginning of last year until now."""
+
+        now = datetime.now(timezone.utc)
+        start = datetime(now.year - 1, 1, 1, tzinfo=timezone.utc)
+        end = now
+
+        if self.use_sample_data:
+            sample_path = DATA_DIR / "sample_observations.json"
+            with sample_path.open("r", encoding="utf-8") as file:
+                sample = json.load(file)
+            filtered_sample = self._filter_window(sample, start, end)
+            return self._downsample_hourly(filtered_sample)
+
+        observations: List[Observation] = []
+        for station_id in self.station_ids:
+            history = self._fetch_station_observation_history(station_id, start, end)
+            observations.extend(self._filter_window(history, start, end))
+
+        return self._downsample_hourly(observations)
 
     def fetch_forecast(
         self,

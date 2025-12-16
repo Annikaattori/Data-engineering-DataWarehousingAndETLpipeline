@@ -75,9 +75,19 @@ class ObservationProducer:
         observations = client.fetch_latest()
         return self.publish_batch(observations)
 
+    def publish_latest_hourly(self) -> int:
+        client = FMIClient()
+        observations = client.fetch_latest_hourly()
+        return self.publish_batch(observations)
+
     def publish_last_three_years(self) -> int:
         client = FMIClient()
         observations = client.fetch_last_three_years()
+        return self.publish_batch(observations)
+
+    def publish_backfill_last_year_hourly(self) -> int:
+        client = FMIClient()
+        observations = client.fetch_last_year_hourly()
         return self.publish_batch(observations)
 
 
@@ -91,6 +101,7 @@ class BigQuerySink:
         self.dataset = dataset or CONFIG.bigquery_dataset
         self.project_id = project_id or CONFIG.bigquery_project
         self.daily_table = CONFIG.daily_table
+        self.hourly_table = CONFIG.hourly_table
         self.long_term_table = CONFIG.long_term_table
         self.station_whitelist = set(CONFIG.station_whitelist)
         self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
@@ -223,6 +234,24 @@ class BigQuerySink:
         self._update_long_term_table(frame)
         return len(frame)
 
+    def write_hourly_batch(self, observations: List[Observation]):
+        frame = observations_as_dataframe(observations)
+        if frame.empty:
+            LOGGER.warning("Received empty batch; nothing to load")
+            return 0
+
+        frame = transformations.prepare_hourly_for_bigquery(frame)
+
+        destination_table = f"{self.dataset}.{self.hourly_table}"
+        LOGGER.info(
+            "Loading %s hourly rows to %s in project %s",
+            len(frame),
+            destination_table,
+            self.project_id,
+        )
+        self._upload_and_verify(frame, destination_table=destination_table)
+        return len(frame)
+
     def _update_long_term_table(self, frame):
         if frame.empty:
             return
@@ -278,7 +307,7 @@ class ObservationConsumer:
             return 0
 
         LOGGER.info("Uploading %s messages to BigQuery", len(buffer))
-        return self.sink.write_daily_batch(buffer)
+        return self.sink.write_hourly_batch(buffer)
 
 
 def _cli():  # pragma: no cover - convenience entrypoint
@@ -286,12 +315,31 @@ def _cli():  # pragma: no cover - convenience entrypoint
 
     parser = argparse.ArgumentParser(description="Kafka streaming utilities for FMI observations")
     parser.add_argument("action", choices=["produce", "consume"], help="Whether to fetch and publish or consume a batch")
+    parser.add_argument(
+        "--mode",
+        choices=[
+            "latest-hourly",
+            "backfill-last-year-hourly",
+            "latest",
+            "history",
+        ],
+        default="latest-hourly",
+        help="Producer mode: hourly sampling for latest/backfill or legacy modes",
+    )
     parser.add_argument("--max-messages", type=int, default=200, help="Number of messages to read when consuming")
     parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
     args = parser.parse_args()
 
     if args.action == "produce":
-        ObservationProducer().publish_latest()
+        producer = ObservationProducer()
+        if args.mode == "latest-hourly":
+            producer.publish_latest_hourly()
+        elif args.mode == "backfill-last-year-hourly":
+            producer.publish_backfill_last_year_hourly()
+        elif args.mode == "history":
+            producer.publish_last_three_years()
+        else:
+            producer.publish_latest()
     else:
         ObservationConsumer(group_id=args.group_id).consume_once(max_messages=args.max_messages)
 
