@@ -52,13 +52,13 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: "broker:29092"
       KAFKA_TOPIC: "fmi_observations"
       FMI_API_KEY: "${FMI_API_KEY:-}"
-      USE_SAMPLE_DATA: "true"
+      USE_SAMPLE_DATA: "false"
     volumes:
       - ./keys:/app/keys:ro
     command: ["python", "-m", "src.data_processing.kafka_stream", "produce"]
     stop_signal: SIGINT
     stop_grace_period: 20s
-    restart: "no"
+    restart: unless-stopped
 
 
   consumer:
@@ -76,7 +76,7 @@ services:
       FMI_API_KEY: "${FMI_API_KEY:-}"
       BIGQUERY_PROJECT: "fmiweatherdatapipeline"
       BIGQUERY_DATASET: "fmi_weather"
-      BIGQUERY_DAILY_TABLE: "weather"
+      BIGQUERY_HOURLY_TABLE: "weather"
       BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
       GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
     volumes:
@@ -84,7 +84,7 @@ services:
     command: ["python", "-m", "src.data_processing.kafka_stream", "consume", "--max-messages", "5"]
     stop_signal: SIGINT
     stop_grace_period: 20s
-    restart: "no"
+    restart: unless-stopped
 
   hourly-ingestor:
     build:
@@ -96,7 +96,7 @@ services:
       FMI_API_KEY: "${FMI_API_KEY:-}"
       BIGQUERY_PROJECT: "fmiweatherdatapipeline"
       BIGQUERY_DATASET: "fmi_weather"
-      BIGQUERY_HOURLY_TABLE: "weather_hourly_samples"
+      BIGQUERY_HOURLY_TABLE: "weather"
       BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
       GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
     volumes:
@@ -124,7 +124,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      USE_SAMPLE_DATA: "true"
+      USE_SAMPLE_DATA: "false"
     ports:
       - "8501:8501"
     command: ["streamlit", "run", "visualization/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
