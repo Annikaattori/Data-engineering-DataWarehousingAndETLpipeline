@@ -161,3 +161,4 @@ The demo uses sample data by default.
 ```bash
 USE_SAMPLE_DATA=true streamlit run visualization/app.py
 ```
+Visit the UI at [http://localhost:8501](http://localhost:8501) after the command starts.
