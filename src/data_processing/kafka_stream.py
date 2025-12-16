@@ -54,6 +54,7 @@ class BigQuerySink:
         self.dataset = dataset or CONFIG.bigquery_dataset
         self.project_id = project_id or CONFIG.bigquery_project
         self.daily_table = CONFIG.daily_table
+        self.long_term_table = CONFIG.long_term_table
         self.station_whitelist = set(CONFIG.station_whitelist)
         self.credentials_path = credentials_path or CONFIG.bigquery_api_key_path
 
@@ -107,9 +108,6 @@ class BigQuerySink:
                     path,
                 )
         return self._credentials
-
-    def _long_term_table(self, station_id: str) -> str:
-        return f"{self.dataset}.{CONFIG.long_term_table_prefix}{station_id}"
 
     def _verify_row_persistence(self, destination_table: str, expected_rows: int) -> None:
         """Confirm rows landed in BigQuery and emit actionable error logs if not.
@@ -185,24 +183,26 @@ class BigQuerySink:
             self.project_id,
         )
         self._upload_and_verify(frame, destination_table=destination_table)
-        self._update_long_term_tables(frame)
+        self._update_long_term_table(frame)
         return len(frame)
 
-    def _update_long_term_tables(self, frame):
+    def _update_long_term_table(self, frame):
         if frame.empty:
             return
-        for station_id, station_frame in frame.groupby("station_id"):
-            if station_id not in self.station_whitelist:
-                continue
-            table_name = self._long_term_table(station_id)
-            # Extra logging makes it easy to follow per-station uploads when running locally
-            LOGGER.info(
-                "Updating long-term table %s with %s rows (station %s)",
-                table_name,
-                len(station_frame),
-                station_id,
-            )
-            self._upload_and_verify(station_frame, destination_table=table_name)
+
+        filtered = frame[frame["station_id"].isin(self.station_whitelist)]
+        if filtered.empty:
+            LOGGER.info("No whitelisted stations present; skipping long-term update")
+            return
+
+        destination_table = f"{self.dataset}.{self.long_term_table}"
+        LOGGER.info(
+            "Updating long-term table %s with %s rows across %s stations",
+            destination_table,
+            len(filtered),
+            filtered["station_id"].nunique(),
+        )
+        self._upload_and_verify(filtered, destination_table=destination_table)
 
 
 class ObservationConsumer:
@@ -225,12 +225,12 @@ class ObservationConsumer:
 
         self.sink = BigQuerySink()
 
-    def consume_once(self, max_messages: int = 200) -> int:
+    def consume_once(self, max_messages: int | None = None) -> int:
         # Collect Kafka messages in-memory so we can upload in a single BigQuery batch
         buffer: List[Observation] = []
         for index, message in enumerate(self.consumer):
             buffer.append(message.value)
-            if index + 1 >= max_messages:
+            if max_messages is not None and index + 1 >= max_messages:
                 break
 
         if not buffer:

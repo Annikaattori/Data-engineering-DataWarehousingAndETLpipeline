@@ -163,12 +163,12 @@ class FMIClient:
                 observations.append(observation)
         return observations
 
-    def _filter_three_year_window(self, observations: List[Observation]) -> List[Observation]:
+    def _filter_window(
+        self, observations: List[Observation], start: datetime, end: datetime
+    ) -> List[Observation]:
         if not observations:
             return []
 
-        three_years_ago = datetime.now(timezone.utc) - timedelta(days=365 * 3)
-        now = datetime.now(timezone.utc)
         filtered: List[Observation] = []
         for obs in observations:
             timestamp = obs.get("timestamp")
@@ -185,7 +185,7 @@ class FMIClient:
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
 
-            if three_years_ago <= parsed <= now:
+            if start <= parsed <= end:
                 filtered.append(obs)
         return filtered
 
@@ -209,7 +209,7 @@ class FMIClient:
         return observations
 
     def fetch_last_three_years(self) -> List[Observation]:
-        """Return historical observations for whitelisted stations."""
+        """Return historical observations starting from 2022 in half-hour resolution."""
 
         now = datetime.now(timezone.utc)
         if self.__class__._history_fetched_at and now - self.__class__._history_fetched_at < self._history_ttl:
@@ -219,14 +219,14 @@ class FMIClient:
             )
             return list(self.__class__._history_cache)
 
-        start = datetime.now(timezone.utc) - timedelta(days=365 * 3)
+        start = datetime(2022, 1, 1, tzinfo=timezone.utc)
         end = now
 
         if self.use_sample_data:
             sample_path = DATA_DIR / "sample_observations.json"
             with sample_path.open("r", encoding="utf-8") as file:
                 sample = json.load(file)
-            filtered_sample = self._filter_three_year_window(sample)
+            filtered_sample = self._filter_window(sample, start, end)
             self.__class__._history_cache = filtered_sample
             self.__class__._history_fetched_at = now
             return filtered_sample
@@ -234,7 +234,7 @@ class FMIClient:
         observations: List[Observation] = []
         for station_id in self.station_ids:
             history = self._fetch_station_observation_history(station_id, start, end)
-            observations.extend(self._filter_three_year_window(history))
+            observations.extend(self._filter_window(history, start, end))
         self.__class__._history_cache = observations
         self.__class__._history_fetched_at = now
         return observations
