@@ -152,6 +152,64 @@ class BigQuerySink:
                 )
         return self._credentials
 
+    def _table_exists(self, table_id: str) -> bool:
+        try:  # pragma: no cover - requires live BigQuery
+            from google.cloud.exceptions import NotFound
+
+            self.bq_client.get_table(table_id)
+            return True
+        except NotFound:
+            LOGGER.info("BigQuery table %s not found", table_id)
+            return False
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.warning("Unable to verify existence of %s: %s", table_id, exc)
+            return False
+
+    def _has_recent_history(self, table_id: str, lookback_days: int = 365) -> bool:
+        if not self._table_exists(table_id):
+            return False
+
+        query = (
+            "SELECT COUNT(1) as row_count "
+            f"FROM `{self.project_id}.{table_id}` "
+            "WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)"
+        )
+
+        try:  # pragma: no cover - requires live BigQuery
+            from google.cloud import bigquery
+
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("days", "INT64", lookback_days)
+                ]
+            )
+            rows = list(self.bq_client.query(query, job_config=job_config).result())
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.warning(
+                "Unable to query history window for %s: %s. Falling back to backfill.",
+                table_id,
+                exc,
+            )
+            return False
+
+        if not rows:
+            return False
+
+        row_count = rows[0].get("row_count", 0)
+        if row_count == 0:
+            LOGGER.info(
+                "No rows found in the last %s days for %s; backfill required", lookback_days, table_id
+            )
+            return False
+
+        LOGGER.info(
+            "Detected %s rows in the last %s days for %s; skipping backfill",
+            row_count,
+            lookback_days,
+            table_id,
+        )
+        return True
+
     def _verify_row_persistence(self, destination_table: str, expected_rows: int) -> None:
         """Confirm rows landed in BigQuery and emit actionable error logs if not.
 
@@ -247,6 +305,23 @@ class BigQuerySink:
         self._upload_and_verify(frame, destination_table=destination_table)
         return len(frame)
 
+    def ensure_hourly_history(self, lookback_days: int = 365) -> bool:
+        destination_table = f"{self.dataset}.{self.hourly_table}"
+        if self._has_recent_history(destination_table, lookback_days=lookback_days):
+            return True
+
+        client = FMIClient()
+        LOGGER.info(
+            "Fetching %s days of hourly history to populate %s", lookback_days, destination_table
+        )
+        history = client.fetch_last_year_hourly()
+        if not history:
+            LOGGER.warning("Historical fetch returned no rows; skipping backfill")
+            return False
+
+        self.write_hourly_batch(history)
+        return True
+
     def _update_long_term_table(self, frame):
         if frame.empty:
             return
@@ -305,11 +380,43 @@ class ObservationConsumer:
         return self.sink.write_hourly_batch(buffer)
 
 
+class HourlyIngestionService:
+    """Run periodic hourly ingestion directly to BigQuery."""
+
+    def __init__(
+        self,
+        *,
+        sink: BigQuerySink | None = None,
+        client: FMIClient | None = None,
+        interval_seconds: int = 3600,
+    ):
+        self.sink = sink or BigQuerySink()
+        self.client = client or FMIClient()
+        self.interval_seconds = interval_seconds
+
+    def run_once(self) -> int:
+        observations = self.client.fetch_latest_hourly()
+        return self.sink.write_hourly_batch(observations)
+
+    def run_forever(self) -> None:  # pragma: no cover - long-running loop
+        LOGGER.info(
+            "Starting hourly ingestion service with %s second interval", self.interval_seconds
+        )
+        while True:
+            ingested = self.run_once()
+            LOGGER.info("Hourly ingestion cycle completed with %s rows", ingested)
+            time.sleep(self.interval_seconds)
+
+
 def _cli():  # pragma: no cover - convenience entrypoint
     import argparse
 
     parser = argparse.ArgumentParser(description="Kafka streaming utilities for FMI observations")
-    parser.add_argument("action", choices=["produce", "consume"], help="Whether to fetch and publish or consume a batch")
+    parser.add_argument(
+        "action",
+        choices=["produce", "consume", "bootstrap-hourly"],
+        help="Whether to fetch and publish, consume a batch, or run the hourly bootstrap",
+    )
     parser.add_argument(
         "--mode",
         choices=[
@@ -322,6 +429,12 @@ def _cli():  # pragma: no cover - convenience entrypoint
     )
     parser.add_argument("--max-messages", type=int, default=200, help="Number of messages to read when consuming")
     parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=3600,
+        help="Polling interval for the hourly ingestion service",
+    )
     args = parser.parse_args()
 
     if args.action == "produce":
@@ -332,8 +445,14 @@ def _cli():  # pragma: no cover - convenience entrypoint
             producer.publish_backfill_last_year_hourly()
         else:
             producer.publish_latest()
-    else:
+    elif args.action == "consume":
         ObservationConsumer(group_id=args.group_id).consume_once(max_messages=args.max_messages)
+    else:
+        sink = BigQuerySink()
+        if not sink.ensure_hourly_history():
+            LOGGER.warning("Hourly history backfill did not complete successfully")
+
+        HourlyIngestionService(sink=sink, interval_seconds=args.interval_seconds).run_forever()
 
 
 if __name__ == "__main__":

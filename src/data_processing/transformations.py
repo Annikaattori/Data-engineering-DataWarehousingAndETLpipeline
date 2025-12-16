@@ -224,6 +224,43 @@ def apply_bigquery_schema(frame: pd.DataFrame, schema: list[dict] | None = None)
     return typed[ordered_columns]
 
 
+def validate_against_schema(
+    frame: pd.DataFrame, schema: list[dict] | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Filter out rows that do not match the expected schema.
+
+    Rows where required fields are missing are handled earlier in the pipeline.
+    This validation step ensures that the remaining values conform to the
+    expected pandas dtypes implied by the BigQuery schema. Rows that fail
+    validation are returned separately so callers can log and skip them.
+    """
+
+    if frame.empty:
+        return frame, pd.DataFrame()
+
+    selected_schema = schema or BIGQUERY_SCHEMA
+    expected_types = {field["name"]: field["type"] for field in selected_schema}
+
+    def _row_is_valid(row: pd.Series) -> bool:
+        for column, expected_type in expected_types.items():
+            value = row.get(column)
+            if pd.isna(value):
+                continue
+
+            if expected_type == "STRING" and not isinstance(value, str):
+                return False
+            if expected_type == "FLOAT" and not isinstance(value, (int, float)):
+                return False
+            if expected_type == "TIMESTAMP" and not isinstance(value, pd.Timestamp):
+                return False
+        return True
+
+    valid_mask = frame.apply(_row_is_valid, axis=1)
+    invalid_rows = frame[~valid_mask].reset_index(drop=True)
+    valid_rows = frame[valid_mask].reset_index(drop=True)
+    return valid_rows, invalid_rows
+
+
 def prepare_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
     """Coerce, clean, and deduplicate observations prior to BigQuery load."""
 
@@ -251,6 +288,12 @@ def prepare_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
             "Removed %s duplicate rows based on station_id and timestamp", dropped_dupes
         )
 
+    formatted, invalid_rows = validate_against_schema(formatted)
+    if not invalid_rows.empty:
+        LOGGER.warning(
+            "Skipped %s rows that failed schema validation for daily table", len(invalid_rows)
+        )
+
     return formatted.reset_index(drop=True)
 
 
@@ -275,5 +318,11 @@ def prepare_hourly_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
     dropped_dupes = before_dupes - len(formatted)
     if dropped_dupes:
         LOGGER.info("Removed %s duplicate hourly rows based on station_id and timestamp", dropped_dupes)
+
+    formatted, invalid_rows = validate_against_schema(formatted, schema=BIGQUERY_HOURLY_SCHEMA)
+    if not invalid_rows.empty:
+        LOGGER.warning(
+            "Skipped %s rows that failed schema validation for hourly table", len(invalid_rows)
+        )
 
     return formatted.reset_index(drop=True)

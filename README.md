@@ -115,9 +115,21 @@ Run hourly modes manually through Docker:
   docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --max-messages 2000
   ```
 
+Hourly ingestion service (BigQuery only):
+- The `hourly-ingestor` service will automatically backfill the last year to BigQuery if the hourly table is empty or missing recent data, then continue uploading fresh hourly data.
+- Start it with Docker:
+  ```bash
+  docker compose up -d hourly-ingestor
+  docker compose logs -f hourly-ingestor
+  ```
+
 Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run without FMI API access.
 - For BigQuery loads, mount your service account key at `./keys/bigquery/api_key.json` (the container expects it at `/app/keys/bigquery/api_key.json`).
+
+macOS tips:
+- Docker Desktop for Mac supports the modern `docker compose` (with a space). If your setup only has the legacy plugin, use `docker-compose` instead.
+- Run shell commands separately (e.g., first `git status`, then `docker compose ...`). Combining them on the same line (`git status docker compose ...`) will cause git to treat `docker` as an argument, leading to errors like `unknown option 'rm'`.
 
 ### Stopping the services
 - Stop locally started Python commands (producer/consumer/Streamlit) with `Ctrl+C` in the terminal running them.
