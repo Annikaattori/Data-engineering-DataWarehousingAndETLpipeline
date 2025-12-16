@@ -9,9 +9,9 @@ from airflow.operators.python import PythonOperator
 from src.data_processing.kafka_stream import ObservationConsumer, ObservationProducer
 
 
-def produce_latest(**_):  # pragma: no cover - orchestration glue
+def produce_history(**_):  # pragma: no cover - orchestration glue
     producer = ObservationProducer()
-    producer.publish_latest()
+    producer.publish_last_three_years()
 
 
 def consume_batch(**_):  # pragma: no cover - orchestration glue
@@ -24,13 +24,13 @@ def build_dag():  # pragma: no cover - orchestration glue
         dag_id="fmi_weather_pipeline",
         description="Ingest and process FMI observations",
         start_date=datetime(2024, 6, 1),
-        schedule_interval=timedelta(minutes=15),
+        schedule_interval=timedelta(minutes=30),
         catchup=False,
         max_active_runs=1,
         default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
         tags=["fmi", "weather"],
     ) as dag:
-        ingest = PythonOperator(task_id="produce_latest", python_callable=produce_latest)
+        ingest = PythonOperator(task_id="produce_history", python_callable=produce_history)
         load = PythonOperator(task_id="consume_batch", python_callable=consume_batch)
 
         ingest >> load
