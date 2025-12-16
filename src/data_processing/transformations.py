@@ -80,6 +80,72 @@ BIGQUERY_SCHEMA = [
     },
 ]
 
+BIGQUERY_HOURLY_SCHEMA = [
+    {
+        "name": "station_id",
+        "mode": "REQUIRED",
+        "type": "STRING",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "timestamp",
+        "mode": "REQUIRED",
+        "type": "TIMESTAMP",
+        "description": "Hourly sample timestamp (UTC)",
+        "fields": [],
+    },
+    {
+        "name": "temperature",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "humidity",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "station_name",
+        "mode": "NULLABLE",
+        "type": "STRING",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "latitude",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "longitude",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+    {
+        "name": "elevation",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "Station elevation (metres)",
+        "fields": [],
+    },
+    {
+        "name": "wind_speed",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "",
+        "fields": [],
+    },
+]
+
 
 def deduplicate(observations: Iterable[Observation]) -> List[Observation]:
     frame = pd.DataFrame(observations)
@@ -131,7 +197,7 @@ def build_long_term_tables(frame: pd.DataFrame, station_ids: Iterable[str]) -> d
     return tables
 
 
-def apply_bigquery_schema(frame: pd.DataFrame) -> pd.DataFrame:
+def apply_bigquery_schema(frame: pd.DataFrame, schema: list[dict] | None = None) -> pd.DataFrame:
     """Return a dataframe that matches the expected BigQuery schema.
 
     Columns are ordered to mirror ``BIGQUERY_SCHEMA`` and values are coerced to
@@ -153,7 +219,8 @@ def apply_bigquery_schema(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ["temperature", "humidity", "wind_speed"]:
         typed[column] = pd.to_numeric(typed.get(column, pd.NA), errors="coerce")
 
-    ordered_columns = [field["name"] for field in BIGQUERY_SCHEMA]
+    selected_schema = schema or BIGQUERY_SCHEMA
+    ordered_columns = [field["name"] for field in selected_schema]
     return typed[ordered_columns]
 
 
@@ -183,5 +250,30 @@ def prepare_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
         LOGGER.info(
             "Removed %s duplicate rows based on station_id and timestamp", dropped_dupes
         )
+
+    return formatted.reset_index(drop=True)
+
+
+def prepare_hourly_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
+    """Prepare hourly samples for loading into BigQuery."""
+
+    if frame.empty:
+        return frame
+
+    formatted = apply_bigquery_schema(frame, schema=BIGQUERY_HOURLY_SCHEMA)
+
+    formatted["timestamp"] = pd.to_datetime(formatted["timestamp"], utc=True).dt.floor("H")
+
+    before_missing = len(formatted)
+    formatted = formatted.dropna(subset=["station_id", "timestamp"])
+    dropped_missing = before_missing - len(formatted)
+    if dropped_missing:
+        LOGGER.info("Dropped %s rows with missing required fields (station_id, timestamp)", dropped_missing)
+
+    before_dupes = len(formatted)
+    formatted = formatted.drop_duplicates(subset=["station_id", "timestamp"], keep="last")
+    dropped_dupes = before_dupes - len(formatted)
+    if dropped_dupes:
+        LOGGER.info("Removed %s duplicate hourly rows based on station_id and timestamp", dropped_dupes)
 
     return formatted.reset_index(drop=True)
