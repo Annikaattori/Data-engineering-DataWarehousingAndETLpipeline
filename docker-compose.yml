@@ -30,7 +30,7 @@ services:
     container_name: init-topics
     depends_on:
       - broker
-    restart: "no"
+    restart: unless-stopped
     command: >
       bash -lc "
       sleep 8 &&

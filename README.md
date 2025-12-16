@@ -102,7 +102,7 @@ docker compose ps
 docker compose logs -f producer
 docker compose logs -f consumer
 ```
-
+Visit the UI at [http://localhost:8501](http://localhost:8501) after the command starts.
 Run hourly modes manually through Docker:
 - Latest hourly batch:
   ```bash
