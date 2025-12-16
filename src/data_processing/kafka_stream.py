@@ -342,6 +342,15 @@ class ObservationConsumer:
 
         self.sink = BigQuerySink()
 
+    def _flush_buffer(self, buffer: List[Observation]) -> int:
+        if not buffer:
+            return 0
+
+        LOGGER.info("Uploading %s messages to BigQuery", len(buffer))
+        ingested = self.sink.write_hourly_batch(buffer)
+        buffer.clear()
+        return ingested
+
     def consume_once(self, max_messages: int | None = None) -> int:
         # Collect Kafka messages in-memory so we can upload in a single BigQuery batch
         buffer: List[Observation] = []
@@ -354,8 +363,20 @@ class ObservationConsumer:
             LOGGER.warning("No messages read from Kafka topic %s", self.topic)
             return 0
 
-        LOGGER.info("Uploading %s messages to BigQuery", len(buffer))
-        return self.sink.write_hourly_batch(buffer)
+        return self._flush_buffer(buffer)
+
+    def consume_forever(self, batch_size: int = 500) -> None:  # pragma: no cover - long-running loop
+        LOGGER.info("Starting continuous consumer with batch size %s", batch_size)
+        buffer: List[Observation] = []
+
+        while True:
+            for message in self.consumer:
+                buffer.append(message.value)
+                if len(buffer) >= batch_size:
+                    self._flush_buffer(buffer)
+
+            # consumer iteration ends after consumer_timeout_ms with no new messages
+            self._flush_buffer(buffer)
 
 
 class HourlyIngestionService:
@@ -405,7 +426,12 @@ def _cli():  # pragma: no cover - convenience entrypoint
         default="latest-hourly",
         help="Producer mode: hourly sampling for latest/backfill or raw latest observations",
     )
-    parser.add_argument("--max-messages", type=int, default=200, help="Number of messages to read when consuming")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Number of messages to accumulate before uploading to BigQuery",
+    )
     parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
     parser.add_argument(
         "--interval-seconds",
@@ -424,7 +450,9 @@ def _cli():  # pragma: no cover - convenience entrypoint
         else:
             producer.publish_latest()
     elif args.action == "consume":
-        ObservationConsumer(group_id=args.group_id).consume_once(max_messages=args.max_messages)
+        ObservationConsumer(group_id=args.group_id).consume_forever(
+            batch_size=args.batch_size
+        )
     else:
         sink = BigQuerySink()
         if not sink.ensure_hourly_history():
