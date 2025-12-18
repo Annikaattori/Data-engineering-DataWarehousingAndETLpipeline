@@ -26,19 +26,10 @@ class Observation(TypedDict):
     station_name: str
     latitude: Optional[float]
     longitude: Optional[float]
-    elevation: Optional[float]
     timestamp: str
     temperature: Optional[float]
     humidity: Optional[float]
     wind_speed: Optional[float]
-
-
-class ForecastPoint(TypedDict, total=False):
-    place: str
-    timestamp: str
-    temperature: Optional[float]
-    wind_speed: Optional[float]
-
 
 class FMIClient:
     """Simple FMI client capable of returning the most recent observations."""
@@ -112,11 +103,10 @@ class FMIClient:
             station_name=station_name,
             latitude=self._extract_value(payload, ["latitude", "lat"]),
             longitude=self._extract_value(payload, ["longitude", "lon", "lng"]),
-            elevation=self._extract_value(payload, ["elevation", "altitude", "height"]),
             timestamp=self._extract_time(payload),
-            temperature=self._extract_value(payload, ["temperature"]),
-            humidity=self._extract_value(payload, ["humidity", "relative_humidity"]),
-            wind_speed=self._extract_value(payload, ["wind_speed", "windspeed"]),
+            temperature=payload.data.temperature.value, #self._extract_value(payload, ["temperature"]),
+            humidity=payload.data.humidity.value, #self._extract_value(payload, ["humidity", "relative_humidity"]),
+            wind_speed=payload.data.wind_speed.value, #self._extract_value(payload, ["wind_speed", "windspeed"]),
         )
 
     def _fetch_station_observation(self, station_id: str) -> Observation | None:
@@ -138,55 +128,6 @@ class FMIClient:
             return None
 
         return self._build_observation(station_id, weather)
-
-    def _downsample_hourly(self, observations: List[Observation]) -> List[Observation]:
-        """Return one observation per station per hour using deterministic flooring.
-
-        Timestamps are floored to the start of the hour (UTC). If multiple
-        observations exist within the same hour for a station, the latest
-        timestamp in that hour is retained to maximise freshness.
-        """
-
-        if not observations:
-            return []
-
-        latest_by_key: dict[tuple[str, datetime], tuple[Observation, datetime]] = {}
-
-        for obs in observations:
-            timestamp = obs.get("timestamp")
-            if not timestamp:
-                continue
-
-            cleaned_timestamp = str(timestamp).replace("Z", "+00:00")
-            try:
-                parsed = datetime.fromisoformat(cleaned_timestamp)
-            except ValueError:
-                LOGGER.debug("Unable to parse observation timestamp %s", timestamp)
-                continue
-
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-
-            hour_bucket = parsed.replace(minute=0, second=0, microsecond=0)
-            key = (str(obs.get("station_id")), hour_bucket)
-
-            existing = latest_by_key.get(key)
-            if existing is not None:
-                _, existing_ts = existing
-                if parsed <= existing_ts:
-                    continue
-
-            latest_by_key[key] = (obs, parsed)
-
-        hourly: List[Observation] = []
-        for (station_id, hour_bucket), (obs, _) in latest_by_key.items():
-            observation_copy = dict(obs)
-            observation_copy["station_id"] = str(station_id)
-            observation_copy["timestamp"] = hour_bucket.isoformat()
-            hourly.append(observation_copy)  # type: ignore[arg-type]
-
-        hourly.sort(key=lambda item: (item.get("station_id"), item.get("timestamp")))
-        return hourly
 
     def fetch_latest(self) -> List[Observation]:
         """Return the latest observations using ``fmi-weather-client``.
@@ -211,63 +152,7 @@ class FMIClient:
         """Return the latest observations downsampled to hourly resolution."""
 
         latest = self.fetch_latest()
-        return self._downsample_hourly(latest)
-
-    def fetch_forecast(
-        self,
-        place_name: str,
-        *,
-        timestep_hours: int = 24,
-        forecast_points: int = 4,
-    ) -> List[ForecastPoint]:
-        """Return forecast points for a place using ``forecast_by_place_name``.
-
-        The method returns an empty list when sample data is enabled or when the
-        FMI API responds with an error so that downstream code can continue
-        gracefully.
-        """
-
-        if self.use_sample_data:
-            LOGGER.info("Sample mode enabled; skipping live forecast fetch for %s", place_name)
-            return []
-
-        try:
-            forecast = fmi.forecast_by_place_name(
-                place_name,
-                timestep_hours=timestep_hours,
-                forecast_points=forecast_points,
-            )
-        except ClientError as err:
-            LOGGER.warning(
-                "Client error while fetching forecast for %s (status %s): %s",
-                place_name,
-                err.status_code,
-                err.message,
-            )
-            return []
-        except ServerError as err:  # pragma: no cover - network interactions
-            LOGGER.error(
-                "Server error while fetching forecast for %s (status %s): %s",
-                place_name,
-                err.status_code,
-                err.body,
-            )
-            return []
-
-        if forecast is None:
-            return []
-
-        points: List[ForecastPoint] = []
-        for entry in getattr(forecast, "forecasts", []):
-            points.append(
-                ForecastPoint(
-                    place=getattr(forecast, "place", place_name),
-                    timestamp=self._extract_time(entry),
-                    temperature=self._extract_value(entry, ["temperature"]),
-                    wind_speed=self._extract_value(entry, ["wind_speed", "windspeed"]),
-                )
-            )
-        return points
+        return latest #self._downsample_hourly(latest)
 
 
 def observations_as_dataframe(observations: Iterable[Observation]):

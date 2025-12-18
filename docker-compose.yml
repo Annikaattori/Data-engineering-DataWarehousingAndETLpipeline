@@ -79,39 +79,41 @@ services:
       BIGQUERY_HOURLY_TABLE: "weather"
       BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
       GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
+      WATERMARK_PATH: "/app/state/consumer_watermark.json"
     volumes:
       - ./keys:/app/keys:ro
-    command: ["python", "-m", "src.data_processing.kafka_stream", "consume", "--max-messages", "5"]
+      - ./state:/app/state
+    command: ["python", "-m", "src.data_processing.kafka_stream", "consume"]
     stop_signal: SIGINT
     stop_grace_period: 20s
     restart: unless-stopped
 
-  hourly-ingestor:
-    build:
-      context: .
-      args:
-        REQUIREMENTS_FILE: requirements-worker.txt
-    container_name: hourly-ingestor
-    environment:
-      FMI_API_KEY: "${FMI_API_KEY:-}"
-      BIGQUERY_PROJECT: "fmiweatherdatapipeline"
-      BIGQUERY_DATASET: "fmi_weather"
-      BIGQUERY_HOURLY_TABLE: "weather"
-      BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
-      GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
-    volumes:
-      - ./keys:/app/keys:ro
-    command: [
-      "python",
-      "-m",
-      "src.data_processing.kafka_stream",
-      "bootstrap-hourly",
-      "--interval-seconds",
-      "3600",
-    ]
-    stop_signal: SIGINT
-    stop_grace_period: 20s
-    restart: unless-stopped
+  # hourly-ingestor:
+  #   build:
+  #     context: .
+  #     args:
+  #       REQUIREMENTS_FILE: requirements-worker.txt
+  #   container_name: hourly-ingestor
+  #   environment:
+  #     FMI_API_KEY: "${FMI_API_KEY:-}"
+  #     BIGQUERY_PROJECT: "fmiweatherdatapipeline"
+  #     BIGQUERY_DATASET: "fmi_weather"
+  #     BIGQUERY_HOURLY_TABLE: "weather"
+  #     BIGQUERY_API_KEY_PATH: "/app/keys/bigquery/api_key.json"
+  #     GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
+  #   volumes:
+  #     - ./keys:/app/keys:ro
+  #   command: [
+  #     "python",
+  #     "-m",
+  #     "src.data_processing.kafka_stream",
+  #     "bootstrap-hourly",
+  #     "--interval-seconds",
+  #     "3600",
+  #   ]
+  #   stop_signal: SIGINT
+  #   stop_grace_period: 20s
+  #   restart: unless-stopped
 
   streamlit:
     build:
@@ -123,8 +125,12 @@ services:
       - consumer
     volumes:
       - ./data:/app/data
+      - ./visualization:/app/visualization
+      - ./src:/app/src
+      - ./keys:/app/keys:ro
     environment:
       USE_SAMPLE_DATA: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/keys/bigquery/api_key.json"
     ports:
       - "8501:8501"
     command: ["streamlit", "run", "visualization/app.py", "--server.address=0.0.0.0", "--server.port=8501"]

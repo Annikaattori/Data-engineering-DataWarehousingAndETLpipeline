@@ -39,18 +39,19 @@ class PipelineConfig:
     bigquery_api_key_path: str | None = os.getenv("BIGQUERY_API_KEY_PATH") or str(
         DEFAULT_BIGQUERY_KEY_PATH
     )
-    daily_table: str = os.getenv("BIGQUERY_DAILY_TABLE", "weather")
-    hourly_table: str = os.getenv("BIGQUERY_HOURLY_TABLE", "weather_hourly_samples")
-    long_term_table: str = os.getenv("BIGQUERY_LONG_TERM_TABLE", "weather_history")
+    use_sample_data : bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
+    hourly_table: str = os.getenv("BIGQUERY_HOURLY_TABLE", "weather")
+    watermark_path: str = os.getenv("WATERMARK_PATH", "/app/state/watermark.json")
     station_whitelist: list[str] = field(
         default_factory=lambda: _list_from_env(os.getenv("STATION_WHITELIST"))
         or [
             # Sensible defaults so demos render long-term charts without extra env vars
-            "101104",  # Helsinki Kaisaniemi
-            "100968",  # Turku Artukainen
-            "100946",  # Tampere Pirkkala
-            "102172",  # Oulu Oulunsalo
-            "101932",  # Kuopio Savilahti
+            "101976",  # Näkkälä
+            "100723",  # Espoo Luukki
+            "101784",  # Hailuoto Marjaniemi
+            "102033",  # Inari Ivalo lentoasema
+            "101339",  # Jyväskylä lentoasema
+            "101725",  # Kajaani lentoasema
         ]
     )
     forecast_places: list[str] = field(

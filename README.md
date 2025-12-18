@@ -19,7 +19,6 @@ Rows land directly in a single BigQuery table (default `weather_hourly_samples`;
 - `station_name` (STRING)
 - `latitude` (FLOAT)
 - `longitude` (FLOAT)
-- `elevation` (FLOAT)
 - `wind_speed` (FLOAT)
 
 Uniqueness conceptually follows (`station_id`, `timestamp`). Deduplication is applied inside each batch; BigQuery receives append-only loads.
@@ -28,7 +27,7 @@ Uniqueness conceptually follows (`station_id`, `timestamp`). Deduplication is ap
 1. **Sampling**: `FMIClient` down-samples to hourly resolution by flooring timestamps and keeping the latest observation within each hour. Sample fixtures follow the same rule for parity with live data.
 2. **Kafka**: `ObservationProducer` publishes the latest hourly readings from the station whitelist. Messages are JSON-encoded.
 3. **BigQuery load**: `ObservationConsumer` batches Kafka messages, converts them with `transformations.prepare_hourly_for_bigquery`, deduplicates on `(station_id, timestamp)`, and appends directly to the hourly table (`CONFIG.hourly_table`). The consumer remains running until stopped manually.
-4. **Orchestration**: Airflow triggers the producer and starts the continuous consumer hourly, or you can run the consumer long-lived outside Airflow.
+4. **Orchestration**: Airflow triggers the producer and starts the continuous consumer
 5. **Visualisation**: `visualization/app.py` can read BigQuery or the bundled sample data.
 
 ## Environment configuration
@@ -40,10 +39,10 @@ Key environment variables:
 - `FORECAST_PLACES`: Comma-separated list of place names to pull forecasts for (optional).
 - `BIGQUERY_PROJECT`: BigQuery project ID (default `fmiweatherdatapipeline`).
 - `BIGQUERY_DATASET`: Dataset where tables are stored (default `fmi_weather`).
-- `BIGQUERY_HOURLY_TABLE`: Hourly table name (default `weather_hourly_samples`).
-- `BIGQUERY_DAILY_TABLE`: Legacy daily table name (kept for compatibility but unused by the hourly sink).
+- `BIGQUERY_HOURLY_TABLE`: Table name (default `weather`). Name is legacy name, should be just BIG_QUERY_TABLE
 - `BIGQUERY_API_KEY_PATH`: Path to the BigQuery API key or service account JSON file (default `keys/bigquery/api_key.json`).
 - `STATION_WHITELIST`: Comma-separated list of station IDs that are allowed for ingestion (defaults to five Finnish stations).
+- `WATERMARK_PATH`: Path to the watermark JSON file which is used for filtering the data -> Same data won't be pushed many times to BigQuery (default `"/app/state/watermark.json`). 
 
 Place your BigQuery API key or service account JSON file at `keys/bigquery/api_key.json` or point `BIGQUERY_API_KEY_PATH` to its location.
 
@@ -74,10 +73,11 @@ pip install -r requirements-airflow.txt
 ```
 
 ### Producing and consuming observations
-Run the producer once to send **hourly** observations into Kafka:
-```bash
-USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce --mode latest-hourly
+Run the producer once to send observations into Kafka:
+# latest-hourly is also legacy function because of principle "dont touch if it works".  
 ```
+```bash
+USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream produce --mode latest-hourly 
 
 Start the consumer and keep it running to stream uploads into BigQuery:
 ```bash
@@ -85,7 +85,7 @@ USE_SAMPLE_DATA=true python -m src.data_processing.kafka_stream consume --batch-
 ```
 
 ### Airflow
-Copy `dags/fmi_weather_dag.py` into your Airflow `dags/` folder. The primary DAG `fmi_weather_pipeline` schedules the producer and starts the continuous consumer **hourly** (`@hourly`). The consumer task is long-running and should be stopped manually when maintenance is required.
+Copy `dags/fmi_weather_dag.py` into your Airflow `dags/` folder. The primary DAG `fmi_weather_pipeline` schedules the producer and starts the continuous consumer (`@hourly`). The consumer task is long-running and should be stopped manually when maintenance is required.
 
 ### Running with Docker
 
@@ -95,21 +95,31 @@ docker compose up -d --build
 docker compose ps
 docker compose logs -f producer
 docker compose logs -f consumer
+
 ```
+### Streamlit rerun
+```bash 
+docker compose restart streamlit # not rebuild
+docker compose up -d --no-deps --force-recreate streamlit # recreate without dependies
+docker compose up -d --build --no-deps streamlit # new image 
+docker compose logs -f streamlit # check logs 
+
 Visit the UI at [http://localhost:8501](http://localhost:8501) after the command starts.
-Run hourly modes manually through Docker:
+
+# Below code not tested 
+<!-- Run hourly modes manually through Docker:
 - Latest hourly batch:
   ```bash
   docker compose run --rm producer python -m src.data_processing.kafka_stream produce --mode latest-hourly
   docker compose run --rm consumer python -m src.data_processing.kafka_stream consume --batch-size 500
-  ```
+  ``` -->
 
-Hourly ingestion service (BigQuery only):
+<!-- Hourly ingestion service (BigQuery only):
 - Start it with Docker:
   ```bash
   docker compose up -d hourly-ingestor
   docker compose logs -f hourly-ingestor
-  ```
+  ``` -->
 
 Environment notes:
 - The compose file sets `USE_SAMPLE_DATA=true` for the producer so it can run without FMI API access.

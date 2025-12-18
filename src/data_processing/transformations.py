@@ -14,138 +14,64 @@ LOGGER = logging.getLogger(__name__)
 # BigQuery table schema used by the pipeline uploads. Keeping the schema in
 # code makes it easy to validate and reshape the dataframe before loading so
 # that upstream API changes do not break ingestion.
-BIGQUERY_SCHEMA = [
-    {
-        "name": "station_id",
-        "mode": "REQUIRED",
-        "type": "STRING",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "station_name",
-        "mode": "NULLABLE",
-        "type": "STRING",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "latitude",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "longitude",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "elevation",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "Station elevation (metres)",
-        "fields": [],
-    },
-    {
-        "name": "timestamp",
-        "mode": "REQUIRED",
-        "type": "TIMESTAMP",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "temperature",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "humidity",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "wind_speed",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-]
-
 BIGQUERY_HOURLY_SCHEMA = [
     {
         "name": "station_id",
         "mode": "REQUIRED",
         "type": "STRING",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "timestamp",
-        "mode": "REQUIRED",
-        "type": "TIMESTAMP",
-        "description": "Hourly sample timestamp (UTC)",
-        "fields": [],
-    },
-    {
-        "name": "temperature",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
-        "fields": [],
-    },
-    {
-        "name": "humidity",
-        "mode": "NULLABLE",
-        "type": "FLOAT",
-        "description": "",
+        "description": "Finnish Meteorological Institute station ID",
         "fields": [],
     },
     {
         "name": "station_name",
         "mode": "NULLABLE",
         "type": "STRING",
-        "description": "",
+        "description": "Finnish Meteorological Institute station name",
         "fields": [],
     },
     {
         "name": "latitude",
         "mode": "NULLABLE",
         "type": "FLOAT",
-        "description": "",
+        "description": "Station latitude (degrees)",
         "fields": [],
     },
     {
         "name": "longitude",
         "mode": "NULLABLE",
         "type": "FLOAT",
-        "description": "",
+        "description": "Station longitude (degrees)",
         "fields": [],
     },
     {
-        "name": "elevation",
+        "name": "timestamp",
+        "mode": "REQUIRED",
+        "type": "TIMESTAMP",
+        "description": "Sample timestamp (UTC)",
+        "fields": [],
+    },
+    {
+        "name": "temperature",
         "mode": "NULLABLE",
         "type": "FLOAT",
-        "description": "Station elevation (metres)",
+        "description": "Celsius",
+        "fields": [],
+    },
+    {
+        "name": "humidity",
+        "mode": "NULLABLE",
+        "type": "FLOAT",
+        "description": "%",
         "fields": [],
     },
     {
         "name": "wind_speed",
         "mode": "NULLABLE",
         "type": "FLOAT",
-        "description": "",
+        "description": "m/s",
         "fields": [],
     },
 ]
-
 
 def deduplicate(observations: Iterable[Observation]) -> List[Observation]:
     frame = pd.DataFrame(observations)
@@ -178,14 +104,6 @@ def detect_outliers(frame: pd.DataFrame, z_threshold: float = 3.0) -> pd.DataFra
     return frame.loc[mask]
 
 
-def daily_table(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    aggregated = frame.copy()
-    aggregated["date"] = pd.to_datetime(aggregated["timestamp"], utc=True).dt.date
-    return aggregated
-
-
 def build_long_term_tables(frame: pd.DataFrame, station_ids: Iterable[str]) -> dict[str, pd.DataFrame]:
     tables: dict[str, pd.DataFrame] = {}
     if frame.empty:
@@ -213,13 +131,12 @@ def apply_bigquery_schema(frame: pd.DataFrame, schema: list[dict] | None = None)
     typed["station_name"] = typed.get("station_name", pd.NA)
     typed["latitude"] = pd.to_numeric(typed.get("latitude", pd.NA), errors="coerce")
     typed["longitude"] = pd.to_numeric(typed.get("longitude", pd.NA), errors="coerce")
-    typed["elevation"] = pd.to_numeric(typed.get("elevation", pd.NA), errors="coerce")
     typed["timestamp"] = pd.to_datetime(typed["timestamp"], utc=True)
 
     for column in ["temperature", "humidity", "wind_speed"]:
         typed[column] = pd.to_numeric(typed.get(column, pd.NA), errors="coerce")
 
-    selected_schema = schema or BIGQUERY_SCHEMA
+    selected_schema = schema or BIGQUERY_HOURLY_SCHEMA
     ordered_columns = [field["name"] for field in selected_schema]
     return typed[ordered_columns]
 
@@ -238,7 +155,7 @@ def validate_against_schema(
     if frame.empty:
         return frame, pd.DataFrame()
 
-    selected_schema = schema or BIGQUERY_SCHEMA
+    selected_schema = schema or BIGQUERY_HOURLY_SCHEMA
     expected_types = {field["name"]: field["type"] for field in selected_schema}
 
     def _row_is_valid(row: pd.Series) -> bool:
@@ -305,7 +222,7 @@ def prepare_hourly_for_bigquery(frame: pd.DataFrame) -> pd.DataFrame:
 
     formatted = apply_bigquery_schema(frame, schema=BIGQUERY_HOURLY_SCHEMA)
 
-    formatted["timestamp"] = pd.to_datetime(formatted["timestamp"], utc=True).dt.floor("H")
+    formatted["timestamp"] = pd.to_datetime(formatted["timestamp"], utc=True)
 
     before_missing = len(formatted)
     formatted = formatted.dropna(subset=["station_id", "timestamp"])

@@ -4,19 +4,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.providers.docker.operators.docker import DockerOperator
 
-from src.data_processing.kafka_stream import ObservationConsumer, ObservationProducer
-
-
-def produce_latest_hourly(**_):  # pragma: no cover - orchestration glue
-    producer = ObservationProducer()
-    producer.publish_latest_hourly()
-
-
-def consume_continuously(**_):  # pragma: no cover - orchestration glue
-    consumer = ObservationConsumer()
-    consumer.consume_forever()
+from src.data_processing.config import CONFIG
 
 
 def build_dag():  # pragma: no cover - orchestration glue
@@ -30,11 +20,36 @@ def build_dag():  # pragma: no cover - orchestration glue
         default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
         tags=["fmi", "weather"],
     ) as dag:
-        ingest = PythonOperator(
+        ingest = DockerOperator(
             task_id="produce_latest_hourly",
-            python_callable=produce_latest_hourly,
+            image="fmi-weather-pipeline:latest",  # Oletetaan, että image on rakennettu
+            command=["python", "-m", "src.data_processing.kafka_stream", "produce", "--mode", "latest-hourly"],
+            auto_remove=True,
+            environment={
+                "USE_SAMPLE_DATA": "false",
+                "KAFKA_BOOTSTRAP_SERVERS": "broker:29092",
+                "FMI_API_KEY": "{{ var.value.fmi_api_key }}",  # Tai ympäristömuuttuja
+            },
+            networks=["data-engineering-datawarehousingandetlpipeline_default"],  # Oletetaan docker-compose network
         )
-        load = PythonOperator(task_id="consume_stream", python_callable=consume_continuously)
+        load = DockerOperator(
+            task_id="consume_stream",
+            image="fmi-weather-pipeline:latest",
+            command=["python", "-m", "src.data_processing.kafka_stream", "consume", "--batch-size", "500"],
+            auto_remove=True,
+            execution_timeout=timedelta(hours=1),  # Pysäytä 1 tunnin jälkeen
+            environment={
+                "USE_SAMPLE_DATA": "false",
+                "KAFKA_BOOTSTRAP_SERVERS": "broker:29092",
+                "BIGQUERY_PROJECT": "fmiweatherdatapipeline",
+                "BIGQUERY_DATASET": "fmi_weather",
+                "BIGQUERY_HOURLY_TABLE": "weather",
+                "BIGQUERY_API_KEY_PATH": "/app/keys/bigquery/api_key.json",
+                "GOOGLE_APPLICATION_CREDENTIALS": "/app/keys/bigquery/api_key.json",
+            },
+            networks=["data-engineering-datawarehousingandetlpipeline_default"], 
+            volumes=CONFIG.bigquery_api_key_path,  # Aseta oikea polku
+        )
 
         ingest >> load
     return dag

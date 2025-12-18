@@ -13,6 +13,7 @@ from kafka.errors import NoBrokersAvailable
 from .config import CONFIG
 from .fmi_client import FMIClient, Observation, observations_as_dataframe
 from . import transformations
+from datetime import datetime, timezone
 
 LOGGER = logging.getLogger(__name__)
 
@@ -215,24 +216,6 @@ class BigQuerySink:
 
         self._verify_row_persistence(destination_table, expected_rows=len(frame))
 
-    def write_daily_batch(self, observations: List[Observation]):
-        frame = observations_as_dataframe(observations)
-        if frame.empty:
-            LOGGER.warning("Received empty batch; nothing to load")
-            return 0
-
-        frame = transformations.prepare_for_bigquery(frame)
-
-        destination_table = f"{self.dataset}.{self.observations_table}"
-        LOGGER.info(
-            "Loading %s rows to %s in project %s",
-            len(frame),
-            destination_table,
-            self.project_id,
-        )
-        self._upload_and_verify(frame, destination_table=destination_table)
-        return len(frame)
-
     def write_hourly_batch(self, observations: List[Observation]):
         frame = observations_as_dataframe(observations)
         if frame.empty:
@@ -250,6 +233,55 @@ class BigQuerySink:
         )
         self._upload_and_verify(frame, destination_table=destination_table)
         return len(frame)
+
+class WatermarkStore:
+    """Persistoi viimeisin ingestattu timestamp per station_id JSON-tiedostoon."""
+
+    def __init__(self, path: str):
+        self.path = Path(path)
+        self.state: dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            self.state = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(self.state, dict):
+                self.state = {}
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.warning("Watermark file %s could not be read, starting empty: %s", self.path, exc)
+            self.state = {}
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _parse_ts(ts: str) -> datetime:
+        # fromisoformat ei ymmärrä 'Z' -> korvaa UTC-offsetiksi
+        ts_norm = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts_norm)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    def is_new(self, station_id: str, ts: str) -> bool:
+        last = self.state.get(station_id)
+        if not last:
+            return True
+        return self._parse_ts(ts) > self._parse_ts(last)
+
+    def update_from(self, observations: list[Observation]) -> None:
+        # Päivitä max timestamp per station
+        for obs in observations:
+            sid = str(obs.get("station_id"))
+            ts = str(obs.get("timestamp"))
+            if not sid or not ts:
+                continue
+            last = self.state.get(sid)
+            if not last or self._parse_ts(ts) > self._parse_ts(last):
+                self.state[sid] = ts
 
 
 class ObservationConsumer:
@@ -273,18 +305,35 @@ class ObservationConsumer:
         )
 
         self.sink = BigQuerySink()
+        self.watermark = WatermarkStore(CONFIG.watermark_path)
 
     def _flush_buffer(self, buffer: List[Observation]) -> int:
         if not buffer:
             return 0
 
-        LOGGER.info("Uploading %s messages to BigQuery", len(buffer))
-        ingested = self.sink.write_hourly_batch(buffer)
+        # Suodata jo ingestatut (restart-kestävä)
+        filtered: list[Observation] = [
+            obs for obs in buffer
+            if obs.get("station_id") and obs.get("timestamp")
+            and self.watermark.is_new(str(obs["station_id"]), str(obs["timestamp"]))]
+
+        if not filtered:
+            LOGGER.info("All %s buffered messages were already ingested (watermark), skipping upload", len(buffer))
+            buffer.clear()
+            return 0
+
+        LOGGER.info("Uploading %s new messages to BigQuery (buffer had %s)", len(filtered), len(buffer))
+        ingested = self.sink.write_hourly_batch(filtered)
+
+        # Päivitä watermark vain jos upload onnistui (ei exceptionia)
+        self.watermark.update_from(filtered)
+        self.watermark.save()
+
         buffer.clear()
         return ingested
 
     def consume_forever(
-        self, batch_size: int = 500, flush_interval_seconds: int = 10
+        self, batch_size: int = 500, flush_interval_seconds: int = 10, max_duration_seconds: int | None = None
     ) -> None:  # pragma: no cover - long-running loop
         LOGGER.info(
             "Starting continuous consumer with batch size %s and flush interval %ss",
@@ -293,8 +342,12 @@ class ObservationConsumer:
         )
         buffer: List[Observation] = []
         last_flush = time.monotonic()
+        start_time = time.monotonic()
 
         while True:
+            if max_duration_seconds and time.monotonic() - start_time > max_duration_seconds:
+                LOGGER.info("Consumer reached max duration of %s seconds, stopping", max_duration_seconds)
+                break
             message_pack = self.consumer.poll(timeout_ms=1000)
             for messages in message_pack.values():
                 for message in messages:
@@ -338,6 +391,9 @@ class HourlyIngestionService:
 
 def _cli():  # pragma: no cover - convenience entrypoint
     import argparse
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     parser = argparse.ArgumentParser(description="Kafka streaming utilities for FMI observations")
     parser.add_argument(
@@ -359,19 +415,22 @@ def _cli():  # pragma: no cover - convenience entrypoint
     )
     parser.add_argument("--group-id", default="fmi-ingestion", help="Kafka consumer group id")
     parser.add_argument(
-        "--interval-seconds",
+        "--produce-interval-seconds",
         type=int,
-        default=3600,
-        help="Polling interval for the hourly ingestion service",
+        default=60,
+        help="Polling interval for the Kafka producer",
     )
     args = parser.parse_args()
 
     if args.action == "produce":
         producer = ObservationProducer()
-        if args.mode == "latest-hourly":
-            producer.publish_latest_hourly()
-        else:
-            producer.publish_latest()
+        while True:
+            if args.mode == "latest-hourly":
+                producer.publish_latest_hourly()
+            else:
+                producer.publish_latest()
+            time.sleep(args.produce_interval_seconds)
+
     elif args.action == "consume":
         ObservationConsumer(group_id=args.group_id).consume_forever(
             batch_size=args.batch_size
