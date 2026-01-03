@@ -5,3 +5,6 @@ __pycache__/
 
 # API keys
 keys/
+
+# watermark -file
+state/consumer_watermark.json
