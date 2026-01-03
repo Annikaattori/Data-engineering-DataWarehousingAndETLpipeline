@@ -4,14 +4,14 @@ This repository demonstrates an ELT pipeline for ingesting Finnish Meteorologica
 
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
-- `dags/`: Airflow DAGs for hourly ingestion.
+- NOT IN USE: `dags/`: Airflow DAGs for hourly ingestion.
 - `visualization/`: Streamlit demo UI.
 - `data/sample_observations.json`: Sample observations for offline testing.
 
 ## Data model and flow
 
 ### Hourly fact table
-Rows land directly in a single BigQuery table (default `weather_hourly_samples`; configurable via `BIGQUERY_HOURLY_TABLE`). One row per station per hour with the following columns (mirrors `transformations.BIGQUERY_HOURLY_SCHEMA`):
+Rows land directly in a single BigQuery table (default `weather_hourly_samples`; configurable via `BIGQUERY_HOURLY_TABLE`). One row per station with the following columns (mirrors `transformations.BIGQUERY_HOURLY_SCHEMA`):
 - `station_id` (STRING, required)
 - `timestamp` (TIMESTAMP, required) — floored to the start of the hour (UTC)
 - `temperature` (FLOAT)
@@ -24,8 +24,8 @@ Rows land directly in a single BigQuery table (default `weather_hourly_samples`;
 Uniqueness conceptually follows (`station_id`, `timestamp`). Deduplication is applied inside each batch; BigQuery receives append-only loads.
 
 ### Pipeline steps
-1. **Sampling**: `FMIClient` down-samples to hourly resolution by flooring timestamps and keeping the latest observation within each hour. Sample fixtures follow the same rule for parity with live data.
-2. **Kafka**: `ObservationProducer` publishes the latest hourly readings from the station whitelist. Messages are JSON-encoded.
+1. **Sampling**: `FMIClient`. Sample fixtures follow the same rule for parity with live data.
+2. **Kafka**: `ObservationProducer` publishes the latest  readings from the station whitelist. Messages are JSON-encoded.
 3. **BigQuery load**: `ObservationConsumer` batches Kafka messages, converts them with `transformations.prepare_hourly_for_bigquery`, deduplicates on `(station_id, timestamp)`, and appends directly to the hourly table (`CONFIG.hourly_table`). The consumer remains running until stopped manually.
 4. **Orchestration**: Airflow triggers the producer and starts the continuous consumer
 5. **Visualisation**: `visualization/app.py` can read BigQuery or the bundled sample data.

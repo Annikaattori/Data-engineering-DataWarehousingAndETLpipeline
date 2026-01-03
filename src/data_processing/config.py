@@ -30,7 +30,7 @@ class PipelineConfig:
     deployment environments can all inject secrets and connection details
     without changing the codebase.
     """
-
+    # Pipeline configuration variables and paths
     fmi_api_key: str | None = os.getenv("FMI_API_KEY")
     kafka_bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     kafka_topic: str = os.getenv("KAFKA_TOPIC", "fmi_observations")
@@ -39,6 +39,7 @@ class PipelineConfig:
     bigquery_api_key_path: str | None = os.getenv("BIGQUERY_API_KEY_PATH") or str(
         DEFAULT_BIGQUERY_KEY_PATH
     )
+    #BigQuery API key path for authentication
     use_sample_data : bool = os.getenv("USE_SAMPLE_DATA", "false").lower() == "true"
     hourly_table: str = os.getenv("BIGQUERY_HOURLY_TABLE", "weather")
     watermark_path: str = os.getenv("WATERMARK_PATH", "/app/state/watermark.json")
