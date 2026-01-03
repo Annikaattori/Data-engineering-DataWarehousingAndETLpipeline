@@ -2,6 +2,27 @@
 
 This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. The pipeline now focuses solely on fresh data going forward, pulling live observations only from an explicit whitelist of stations. It ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
 
+## Video-friendly introduction
+
+Use the following quick tour when recording a short video that explains the pipeline from producer to visualisation:
+
+1. **Overall flow:** Kafka producer fetches hourly FMI observations ➜ Kafka topic buffers events ➜ Kafka consumer deduplicates and appends to BigQuery ➜ Streamlit dashboard queries BigQuery for charts. Airflow can schedule the producer/consumer containers. No CSC cloud deployment is included yet.
+2. **Component locations and roles:**
+   - **Configuration:** `src/data_processing/config.py` centralises environment variables (Kafka, BigQuery, station whitelist, sample data flag).【F:src/data_processing/config.py†L1-L46】
+   - **FMI access & sampling:** `src/data_processing/fmi_client.py` (not shown in full here) handles API calls and down-samples to hourly observations used by the producer.
+   - **Kafka streaming:** `src/data_processing/kafka_stream.py` contains `ObservationProducer` for pushing hourly batches and `ObservationConsumer` for buffering, watermarking, and loading into BigQuery, plus a CLI (`produce`/`consume`).【F:src/data_processing/kafka_stream.py†L1-L191】【F:src/data_processing/kafka_stream.py†L259-L343】
+   - **Data quality & schemas:** `src/data_processing/transformations.py` defines the BigQuery hourly schema, cleaning/deduplication, and schema validation before loads.【F:src/data_processing/transformations.py†L1-L106】【F:src/data_processing/transformations.py†L124-L173】
+   - **Orchestration (partial):** `dags/fmi_weather_dag.py` provides an Airflow DAG that runs the producer hourly and keeps the consumer running inside Docker containers; it expects images to be built locally and networked via docker-compose.【F:dags/fmi_weather_dag.py†L1-L47】
+   - **Visualisation:** `visualization/app.py` is a Streamlit app that queries the hourly BigQuery table for a selected day and renders temperature/humidity line charts.【F:visualization/app.py†L1-L92】【F:visualization/app.py†L110-L173】
+   - **Local stack:** `docker-compose.yml` builds/runs the producer, consumer, and Streamlit services; BigQuery credentials are mounted from `keys/bigquery/api_key.json`.
+3. **Evaluation coverage:**
+   - **Data model & DAG (2p):** Covered by the hourly BigQuery schema in `transformations.py` and the Airflow DAG.
+   - **Kafka data streaming (2p):** Implemented by `ObservationProducer`/`ObservationConsumer` in `kafka_stream.py`.
+   - **Raw data in BigQuery (2p) & Quality checks (2p):** Hourly table load with schema enforcement and duplicate removal is implemented; no separate raw landing table is present.
+   - **Scheduled orchestration (2p):** Airflow DAG provided; no Mage flow.
+   - **Visualization (2p):** Streamlit dashboard reads from BigQuery.
+   - **CSC cloud configuration (4p):** Not implemented; deployments currently assume local/docker environments.
+
 ## Contents
 - `src/data_processing/`: Python modules for FMI access, Kafka streaming, and transformations.
 - NOT IN USE: `dags/`: Airflow DAGs for hourly ingestion.
