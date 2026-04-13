@@ -2,7 +2,7 @@
 
 This repository demonstrates an ELT pipeline for ingesting Finnish Meteorological Institute (FMI) observations and writing **hourly samples straight into BigQuery**. The pipeline now focuses solely on fresh data going forward, pulling live observations only from an explicit whitelist of stations. It ships with Kafka-based buffering, Airflow orchestration, and a Streamlit dashboard that can operate entirely on bundled fixtures when `USE_SAMPLE_DATA=true`.
 
-## Video-friendly introduction
+## Iintroduction
 
 Use the following quick tour when recording a short video that explains the pipeline from producer to visualisation:
 
